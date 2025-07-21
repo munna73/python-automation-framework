@@ -1,0 +1,45 @@
+# Core dependencies
+pandas>=1.5.0
+numpy>=1.21.0
+configparser
+python-dotenv>=0.19.0
+
+# Database connectors
+cx_Oracle>=8.3.0
+psycopg2-binary>=2.9.0
+SQLAlchemy>=1.4.0
+
+# MongoDB support
+pymongo>=4.3.0
+motor>=3.1.0  # Async MongoDB driver (optional)
+
+# Excel/CSV handling
+openpyxl>=3.0.9
+xlsxwriter>=3.0.3
+
+# API testing
+requests>=2.28.0
+jsonschema>=4.17.0
+
+# MQ integration
+pymqi>=1.12.10
+
+# BDD Testing framework
+behave>=1.2.6
+pytest>=7.0.0
+pytest-html>=3.1.0
+pytest-cov>=4.0.0
+
+# CLI and utilities
+click>=8.1.0
+loguru>=0.6.0
+PyYAML>=6.0
+
+# Reporting
+Jinja2>=3.1.0
+tabulate>=0.9.0
+
+# Development
+black>=22.0.0
+flake8>=5.0.0
+isort>=5.10.0

@@ -1,0 +1,5 @@
+This is a test message for MQ posting.
+It contains sample data for testing the framework.
+Line 3: Test message content
+Line 4: More test data
+Line 5: Final test line
