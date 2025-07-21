@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Main runner script for the automation framework.
-Provides CLI interface for running various framework operations including MongoDB.
+Enhanced with AWS SQS, S3, and SQL integration capabilities.
 """
 import click
 import sys
@@ -18,6 +18,9 @@ from db.mongodb_connector import mongodb_connector
 from db.data_comparator import data_comparator
 from web.api_client import api_client
 from mq.mq_producer import mq_producer
+from aws.sqs_connector import sqs_connector
+from aws.s3_connector import s3_connector
+from aws.sql_integration import aws_sql_integration
 from utils.config_loader import config_loader
 from utils.logger import logger
 from utils.export_utils import ExportUtils
@@ -29,202 +32,308 @@ export_utils = ExportUtils()
 @click.option('--log-level', default='INFO', help='Log level')
 @click.pass_context
 def cli(ctx, env, log_level):
-    """Python Automation Framework CLI with MongoDB support."""
+    """Python Automation Framework CLI with AWS, MongoDB, and SQL support."""
     ctx.ensure_object(dict)
     ctx.obj['ENV'] = env.upper()
     ctx.obj['LOG_LEVEL'] = log_level.upper()
     
     logger.info(f"Starting framework CLI - Environment: {env}, Log Level: {log_level}")
 
+# AWS SQS Commands
 @cli.command()
-@click.option('--source-env', default='DEV', help='Source environment')
-@click.option('--target-env', default='QA', help='Target environment')
-@click.option('--source-db', default='ORACLE', help='Source database type (ORACLE/POSTGRES)')
-@click.option('--target-db', default='ORACLE', help='Target database type (ORACLE/POSTGRES)')
-@click.option('--query-name', default='customer_comparison', help='Query name from config')
-@click.option('--window-minutes', default=60, help='Time window in minutes for chunked queries')
-@click.option('--primary-key', default='customer_id', help='Primary key column for comparison')
-@click.option('--export-format', default='excel', help='Export format (excel/csv)')
+@click.option('--queue-url', required=True, help='SQS queue URL')
+@click.option('--message', required=True, help='Message to send')
+@click.option('--attributes', help='Message attributes (JSON format)')
 @click.pass_context
-def compare(ctx, source_env, target_env, source_db, target_db, query_name, window_minutes, primary_key, export_format):
-    """Compare data between two databases."""
+def sqs_send(ctx, queue_url, message, attributes):
+    """Send message to AWS SQS queue."""
     try:
-        logger.info(f"Starting database comparison: {source_env} {source_db} vs {target_env} {target_db}")
+        logger.info(f"Sending message to SQS queue: {queue_url}")
         
-        # Get query from config
-        query = config_loader.get_query(query_name)
-        
-        # Calculate date range for chunked query (last 24 hours by default)
-        end_date = datetime.now()
-        start_date = end_date - timedelta(hours=24)
-        
-        # Execute queries on both environments
-        logger.info("Executing query on source environment...")
-        source_df = db_connector.execute_chunked_query(
-            source_env, source_db, query, 'created_date',
-            start_date, end_date, window_minutes
-        )
-        
-        logger.info("Executing query on target environment...")
-        target_df = db_connector.execute_chunked_query(
-            target_env, target_db, query, 'created_date', 
-            start_date, end_date, window_minutes
-        )
-        
-        # Perform comparison
-        comparison_name = f"{source_env}_{source_db}_vs_{target_env}_{target_db}_{query_name}"
-        results = data_comparator.compare_dataframes(
-            source_df, target_df, primary_key, comparison_name
-        )
-        
-        # Export results
-        exported_file = data_comparator.export_comparison_results(comparison_name, export_format)
-        
-        # Print summary
-        click.echo(f"\n{'='*50}")
-        click.echo(f"COMPARISON RESULTS: {comparison_name}")
-        click.echo(f"{'='*50}")
-        click.echo(f"Source records: {results['source_count']}")
-        click.echo(f"Target records: {results['target_count']}")
-        click.echo(f"Differences found: {results['differences_count']}")
-        click.echo(f"Missing in target: {results['missing_in_target_count']}")
-        click.echo(f"Missing in source: {results['missing_in_source_count']}")
-        click.echo(f"Match percentage: {results['match_percentage']:.2f}%")
-        click.echo(f"Results exported to: {exported_file}")
-        click.echo(f"{'='*50}")
-        
-    except Exception as e:
-        logger.error(f"Database comparison failed: {e}")
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-
-@cli.command()
-@click.option('--env', required=True, help='Environment (DEV, QA, PROD)')
-@click.option('--collection', required=True, help='MongoDB collection name')
-@click.option('--query', help='MongoDB query filter (JSON format)')
-@click.option('--limit', default=100, help='Maximum documents to return')
-@click.option('--export-format', default='excel', help='Export format (excel/csv)')
-@click.pass_context
-def mongodb_query(ctx, env, collection, query, limit, export_format):
-    """Query MongoDB collection and export results."""
-    try:
-        logger.info(f"Querying MongoDB: {env}.{collection}")
-        
-        # Parse query filter if provided
-        query_filter = {}
-        if query:
+        message_attributes = None
+        if attributes:
             try:
-                query_filter = json.loads(query)
+                message_attributes = json.loads(attributes)
             except json.JSONDecodeError:
-                click.echo(f"Invalid JSON query: {query}", err=True)
+                click.echo(f"Invalid JSON attributes: {attributes}", err=True)
                 sys.exit(1)
         
-        # Execute MongoDB query
-        df = mongodb_connector.execute_find_query(
-            env, collection, query=query_filter, limit=limit
-        )
+        result = sqs_connector.send_message(queue_url, message, message_attributes)
         
-        # Export results
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        if export_format == 'excel':
-            filename = f"mongodb_{env}_{collection}_{timestamp}.xlsx"
-            filepath = f"output/exports/{filename}"
-            export_utils.write_single_dataframe_to_excel(df, filepath, f"{collection}_data")
-        else:
-            filename = f"mongodb_{env}_{collection}_{timestamp}.csv"
-            filepath = f"output/exports/{filename}"
-            export_utils.write_to_csv_safe(df, filepath)
-        
-        # Print summary
         click.echo(f"\n{'='*50}")
-        click.echo(f"MONGODB QUERY RESULTS")
+        click.echo(f"SQS MESSAGE SENT")
         click.echo(f"{'='*50}")
-        click.echo(f"Environment: {env}")
-        click.echo(f"Collection: {collection}")
-        click.echo(f"Query Filter: {query_filter}")
-        click.echo(f"Documents Found: {len(df)}")
-        click.echo(f"Results exported to: {filepath}")
+        click.echo(f"Queue URL: {queue_url}")
+        click.echo(f"Message ID: {result.get('MessageId')}")
+        click.echo(f"MD5: {result.get('MD5OfBody')}")
         click.echo(f"{'='*50}")
-        
-        if not df.empty:
-            click.echo("\nFirst 5 documents:")
-            click.echo(df.head().to_string())
         
     except Exception as e:
-        logger.error(f"MongoDB query failed: {e}")
+        logger.error(f"SQS send failed: {e}")
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
 @cli.command()
-@click.option('--env', required=True, help='Environment (DEV, QA, PROD)')
-@click.option('--collection', required=True, help='MongoDB collection name')
-@click.option('--pipeline', required=True, help='Aggregation pipeline (JSON format)')
-@click.option('--export-format', default='excel', help='Export format (excel/csv)')
+@click.option('--queue-url', required=True, help='SQS queue URL')
+@click.option('--file', required=True, help='File to send')
+@click.option('--mode', default='line', help='Send mode: line (line-by-line) or file (entire file)')
 @click.pass_context
-def mongodb_aggregate(ctx, env, collection, pipeline, export_format):
-    """Execute MongoDB aggregation pipeline."""
+def sqs_send_file(ctx, queue_url, file, mode):
+    """Send file to AWS SQS queue."""
     try:
-        logger.info(f"Running MongoDB aggregation: {env}.{collection}")
+        logger.info(f"Sending file to SQS queue: {file} (mode: {mode})")
         
-        # Parse aggregation pipeline
-        try:
-            pipeline_stages = json.loads(pipeline)
-        except json.JSONDecodeError:
-            click.echo(f"Invalid JSON pipeline: {pipeline}", err=True)
+        line_by_line = mode == 'line'
+        result = sqs_connector.send_file_as_messages(queue_url, file, line_by_line)
+        
+        click.echo(f"\n{'='*50}")
+        click.echo(f"SQS FILE SEND RESULTS")
+        click.echo(f"{'='*50}")
+        click.echo(f"Queue URL: {queue_url}")
+        click.echo(f"File: {result['file_path']}")
+        click.echo(f"Mode: {result['mode']}")
+        click.echo(f"Successful: {result['success_count']}")
+        click.echo(f"Failed: {result['error_count']}")
+        click.echo(f"Success Rate: {result['success_rate']:.2f}%")
+        click.echo(f"{'='*50}")
+        
+        if result['errors']:
+            click.echo("\nErrors:")
+            for error in result['errors'][:5]:
+                click.echo(f"  - {error}")
+        
+    except Exception as e:
+        logger.error(f"SQS file send failed: {e}")
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+@cli.command()
+@click.option('--queue-url', required=True, help='SQS queue URL')
+@click.option('--max-messages', default=10, help='Maximum messages to receive')
+@click.option('--export-file', help='Export messages to file')
+@click.pass_context
+def sqs_receive(ctx, queue_url, max_messages, export_file):
+    """Receive messages from AWS SQS queue."""
+    try:
+        logger.info(f"Receiving messages from SQS queue: {queue_url}")
+        
+        messages = sqs_connector.receive_messages(queue_url, max_messages)
+        
+        click.echo(f"\n{'='*50}")
+        click.echo(f"SQS MESSAGES RECEIVED")
+        click.echo(f"{'='*50}")
+        click.echo(f"Queue URL: {queue_url}")
+        click.echo(f"Messages Received: {len(messages)}")
+        click.echo(f"{'='*50}")
+        
+        for i, message in enumerate(messages[:5], 1):  # Show first 5
+            click.echo(f"\nMessage {i}:")
+            click.echo(f"  ID: {message.get('MessageId')}")
+            click.echo(f"  Body: {message.get('Body', '')[:100]}{'...' if len(message.get('Body', '')) > 100 else ''}")
+        
+        if export_file and messages:
+            # Export messages to file
+            message_bodies = [msg.get('Body', '') for msg in messages]
+            with open(export_file, 'w', encoding='utf-8') as f:
+                for body in message_bodies:
+                    f.write(f"{body}\n")
+            click.echo(f"\nMessages exported to: {export_file}")
+        
+    except Exception as e:
+        logger.error(f"SQS receive failed: {e}")
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+# AWS S3 Commands
+@cli.command()
+@click.option('--bucket', required=True, help='S3 bucket name')
+@click.option('--key', required=True, help='S3 object key')
+@click.option('--local-file', required=True, help='Local file path to save')
+@click.pass_context
+def s3_download_file(ctx, bucket, key, local_file):
+    """Download single file from AWS S3."""
+    try:
+        logger.info(f"Downloading S3 file: s3://{bucket}/{key}")
+        
+        success = s3_connector.download_file(bucket, key, local_file)
+        
+        click.echo(f"\n{'='*50}")
+        click.echo(f"S3 FILE DOWNLOAD")
+        click.echo(f"{'='*50}")
+        click.echo(f"Bucket: {bucket}")
+        click.echo(f"Key: {key}")
+        click.echo(f"Local File: {local_file}")
+        click.echo(f"Status: {'✓ Success' if success else '✗ Failed'}")
+        click.echo(f"{'='*50}")
+        
+        if not success:
             sys.exit(1)
         
-        # Execute aggregation
-        df = mongodb_connector.execute_aggregation_query(env, collection, pipeline_stages)
-        
-        # Export results
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        if export_format == 'excel':
-            filename = f"mongodb_agg_{env}_{collection}_{timestamp}.xlsx"
-            filepath = f"output/exports/{filename}"
-            export_utils.write_single_dataframe_to_excel(df, filepath, f"{collection}_aggregation")
-        else:
-            filename = f"mongodb_agg_{env}_{collection}_{timestamp}.csv"
-            filepath = f"output/exports/{filename}"
-            export_utils.write_to_csv_safe(df, filepath)
-        
-        # Print summary
-        click.echo(f"\n{'='*50}")
-        click.echo(f"MONGODB AGGREGATION RESULTS")
-        click.echo(f"{'='*50}")
-        click.echo(f"Environment: {env}")
-        click.echo(f"Collection: {collection}")
-        click.echo(f"Documents Processed: {len(df)}")
-        click.echo(f"Results exported to: {filepath}")
-        click.echo(f"{'='*50}")
-        
-        if not df.empty:
-            click.echo("\nAggregation results:")
-            click.echo(df.to_string())
-        
     except Exception as e:
-        logger.error(f"MongoDB aggregation failed: {e}")
+        logger.error(f"S3 download failed: {e}")
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
 @cli.command()
-@click.option('--env', required=True, help='Environment to test')
-@click.option('--db-type', required=True, help='Database type (ORACLE/POSTGRES/MONGODB)')
+@click.option('--bucket', required=True, help='S3 bucket name')
+@click.option('--prefix', required=True, help='S3 prefix (directory)')
+@click.option('--local-dir', required=True, help='Local directory to save files')
+@click.option('--create-subdirs/--flatten', default=True, help='Create subdirectories or flatten structure')
 @click.pass_context
-def test_db(ctx, env, db_type):
-    """Test database connection."""
+def s3_download_directory(ctx, bucket, prefix, local_dir, create_subdirs):
+    """Download directory from AWS S3."""
     try:
-        logger.info(f"Testing database connection: {env} {db_type}")
+        logger.info(f"Downloading S3 directory: s3://{bucket}/{prefix}")
         
-        if db_type.upper() == 'MONGODB':
-            success = mongodb_connector.test_connection(env)
-        else:
-            success = db_connector.test_connection(env, db_type)
+        result = s3_connector.download_directory(bucket, prefix, local_dir, create_subdirs)
         
         click.echo(f"\n{'='*50}")
-        click.echo(f"DATABASE CONNECTION TEST")
+        click.echo(f"S3 DIRECTORY DOWNLOAD")
         click.echo(f"{'='*50}")
-        click.echo(f"Environment: {env}")
-        click.echo(f"Database Type: {db_type}")
+        click.echo(f"Bucket: {bucket}")
+        click.echo(f"Prefix: {prefix}")
+        click.echo(f"Local Directory: {local_dir}")
+        click.echo(f"Files Downloaded: {result['downloaded_count']}")
+        click.echo(f"Failed Downloads: {result['failed_count']}")
+        click.echo(f"Total Size: {result['total_size_bytes']:,} bytes")
+        click.echo(f"Success Rate: {result['success_rate']:.2f}%")
+        click.echo(f"{'='*50}")
+        
+        if result['failed_files']:
+            click.echo("\nFailed Files:")
+            for failed_file in result['failed_files'][:5]:
+                click.echo(f"  - {failed_file}")
+        
+    except Exception as e:
+        logger.error(f"S3 directory download failed: {e}")
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+@cli.command()
+@click.option('--bucket', required=True, help='S3 bucket name')
+@click.option('--local-file', required=True, help='Local file to upload')
+@click.option('--key', help='S3 key (uses filename if not provided)')
+@click.pass_context
+def s3_upload(ctx, bucket, local_file, key):
+    """Upload file to AWS S3."""
+    try:
+        logger.info(f"Uploading file to S3: {local_file}")
+        
+        success = s3_connector.upload_file(local_file, bucket, key)
+        
+        final_key = key or Path(local_file).name
+        
+        click.echo(f"\n{'='*50}")
+        click.echo(f"S3 FILE UPLOAD")
+        click.echo(f"{'='*50}")
+        click.echo(f"Local File: {local_file}")
+        click.echo(f"Bucket: {bucket}")
+        click.echo(f"Key: {final_key}")
+        click.echo(f"Status: {'✓ Success' if success else '✗ Failed'}")
+        click.echo(f"{'='*50}")
+        
+        if not success:
+            sys.exit(1)
+        
+    except Exception as e:
+        logger.error(f"S3 upload failed: {e}")
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+# AWS-SQL Integration Commands
+@cli.command()
+@click.option('--queue-url', required=True, help='SQS queue URL')
+@click.option('--env', required=True, help='Database environment')
+@click.option('--db-type', required=True, help='Database type (ORACLE/POSTGRES/MONGODB)')
+@click.option('--table-name', default='aws_sqs_messages', help='SQL table name')
+@click.option('--max-messages', default=10, help='Maximum messages to process')
+@click.option('--delete-after-save', is_flag=True, help='Delete messages from SQS after saving')
+@click.pass_context
+def sqs_to_sql(ctx, queue_url, env, db_type, table_name, max_messages, delete_after_save):
+    """Process SQS messages to SQL database."""
+    try:
+        logger.info(f"Processing SQS queue to SQL: {queue_url} -> {env}.{table_name}")
+        
+        # Create table if it doesn't exist
+        aws_sql_integration.create_message_table(env, db_type, table_name)
+        
+        # Process messages
+        result = aws_sql_integration.process_queue_to_sql(
+            queue_url, env, db_type, max_messages, delete_after_save, table_name
+        )
+        
+        click.echo(f"\n{'='*50}")
+        click.echo(f"SQS TO SQL PROCESSING")
+        click.echo(f"{'='*50}")
+        click.echo(f"Queue URL: {queue_url}")
+        click.echo(f"Database: {env} {db_type}")
+        click.echo(f"Table: {table_name}")
+        click.echo(f"Messages Received: {result['messages_received']}")
+        click.echo(f"Messages Saved: {result['messages_saved']}")
+        click.echo(f"Messages Deleted: {result['messages_deleted']}")
+        click.echo(f"{'='*50}")
+        
+        if result.get('save_errors'):
+            click.echo("\nSave Errors:")
+            for error in result['save_errors'][:3]:
+                click.echo(f"  - {error}")
+        
+    except Exception as e:
+        logger.error(f"SQS to SQL processing failed: {e}")
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+@cli.command()
+@click.option('--env', required=True, help='Database environment')
+@click.option('--db-type', required=True, help='Database type (ORACLE/POSTGRES/MONGODB)')
+@click.option('--output-file', required=True, help='Output file path')
+@click.option('--table-name', default='aws_sqs_messages', help='SQL table name')
+@click.option('--status-filter', help='Filter by message status')
+@click.option('--limit', type=int, help='Limit number of messages')
+@click.pass_context
+def sql_to_file(ctx, env, db_type, output_file, table_name, status_filter, limit):
+    """Export messages from SQL database to file."""
+    try:
+        logger.info(f"Exporting messages from SQL to file: {env}.{table_name} -> {output_file}")
+        
+        result = aws_sql_integration.export_messages_to_file_from_sql(
+            env, db_type, output_file, status_filter, limit, table_name
+        )
+        
+        click.echo(f"\n{'='*50}")
+        click.echo(f"SQL TO FILE EXPORT")
+        click.echo(f"{'='*50}")
+        click.echo(f"Database: {env} {db_type}")
+        click.echo(f"Table: {table_name}")
+        click.echo(f"Output File: {output_file}")
+        click.echo(f"Messages Exported: {result['messages_exported']}")
+        click.echo(f"Status: {'✓ Success' if result['success'] else '✗ Failed'}")
+        click.echo(f"{'='*50}")
+        
+        if not result['success']:
+            click.echo(f"Error: {result.get('error', 'Unknown error')}")
+            sys.exit(1)
+        
+    except Exception as e:
+        logger.error(f"SQL to file export failed: {e}")
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+# Connection Test Commands
+@cli.command()
+@click.option('--queue-url', help='Optional specific queue URL to test')
+@click.pass_context
+def test_sqs(ctx, queue_url):
+    """Test AWS SQS connection."""
+    try:
+        logger.info("Testing AWS SQS connection")
+        
+        success = sqs_connector.test_connection(queue_url)
+        
+        click.echo(f"\n{'='*50}")
+        click.echo(f"AWS SQS CONNECTION TEST")
+        click.echo(f"{'='*50}")
+        click.echo(f"Queue URL: {queue_url or 'General SQS access'}")
         click.echo(f"Connection: {'✓ Success' if success else '✗ Failed'}")
         click.echo(f"{'='*50}")
         
@@ -232,45 +341,37 @@ def test_db(ctx, env, db_type):
             sys.exit(1)
         
     except Exception as e:
-        logger.error(f"Database connection test failed: {e}")
+        logger.error(f"SQS connection test failed: {e}")
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
 @cli.command()
-@click.option('--env', required=True, help='Environment (DEV, QA, PROD)')
-@click.option('--collection', required=True, help='MongoDB collection name')
+@click.option('--bucket', help='Optional specific bucket to test')
 @click.pass_context
-def mongodb_stats(ctx, env, collection):
-    """Get MongoDB collection statistics."""
+def test_s3(ctx, bucket):
+    """Test AWS S3 connection."""
     try:
-        logger.info(f"Getting MongoDB collection statistics: {env}.{collection}")
+        logger.info("Testing AWS S3 connection")
         
-        stats = mongodb_connector.get_collection_stats(env, collection)
+        success = s3_connector.test_connection(bucket)
         
         click.echo(f"\n{'='*50}")
-        click.echo(f"MONGODB COLLECTION STATISTICS")
+        click.echo(f"AWS S3 CONNECTION TEST")
         click.echo(f"{'='*50}")
-        click.echo(f"Environment: {env}")
-        click.echo(f"Collection: {collection}")
-        click.echo(f"Document Count: {stats['document_count']:,}")
-        click.echo(f"Size (bytes): {stats['size_bytes']:,}")
-        click.echo(f"Storage Size: {stats['storage_size']:,}")
-        click.echo(f"Average Object Size: {stats['avg_obj_size']}")
-        click.echo(f"Number of Indexes: {stats['indexes']}")
+        click.echo(f"Bucket: {bucket or 'General S3 access'}")
+        click.echo(f"Connection: {'✓ Success' if success else '✗ Failed'}")
         click.echo(f"{'='*50}")
         
-        if stats['index_sizes']:
-            click.echo("\nIndex Sizes:")
-            for index, size in stats['index_sizes'].items():
-                click.echo(f"  {index}: {size:,} bytes")
+        if not success:
+            sys.exit(1)
         
     except Exception as e:
-        logger.error(f"MongoDB stats retrieval failed: {e}")
+        logger.error(f"S3 connection test failed: {e}")
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
-# Keep existing commands (api, mq, test_api, test_mq) unchanged...
-# [Previous CLI commands remain the same]
+# Keep all existing commands (compare, mongodb-query, api, mq, test-db, etc.)
+# [Previous CLI commands remain unchanged...]
 
 if __name__ == '__main__':
     cli()

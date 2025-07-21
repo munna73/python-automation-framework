@@ -1,0 +1,263 @@
+"""
+AWS-related step definitions for Behave BDD testing.
+"""
+from behave import given, when, then
+from aws.sqs_connector import sqs_connector
+from aws.s3_connector import s3_connector
+from aws.sql_integration import aws_sql_integration
+from utils.logger import logger
+import json
+
+# SQS Step Definitions
+@given('AWS SQS connection is configured')
+def step_sqs_connection_configured(context):
+    """Verify AWS SQS connection is configured."""
+    logger.info("Verifying AWS SQS connection configuration")
+    context.sqs_connector = sqs_connector
+    assert context.sqs_connector.sqs_client is not None, "SQS client not configured"
+
+@given('SQS queue URL is set to "{queue_url}"')
+def step_set_sqs_queue_url(context, queue_url):
+    """Set SQS queue URL for testing."""
+    logger.info(f"Setting SQS queue URL: {queue_url}")
+    context.sqs_queue_url = queue_url
+
+@when('I send message "{message_text}" to SQS queue')
+def step_send_message_to_sqs(context, message_text):
+    """Send a message to SQS queue."""
+    logger.info(f"Sending message to SQS: {message_text}")
+    context.sqs_send_result = context.sqs_connector.send_message(
+        context.sqs_queue_url, message_text
+    )
+
+@when('I send file "{filename}" to SQS queue line by line')
+def step_send_file_line_by_line_sqs(context, filename):
+    """Send file to SQS queue line by line."""
+    logger.info(f"Sending file to SQS line by line: {filename}")
+    context.sqs_file_result = context.sqs_connector.send_file_as_messages(
+        context.sqs_queue_url, filename, line_by_line=True
+    )
+
+@when('I send file "{filename}" to SQS queue as single message')
+def step_send_file_as_single_message_sqs(context, filename):
+    """Send entire file as single SQS message."""
+    logger.info(f"Sending file to SQS as single message: {filename}")
+    context.sqs_file_result = context.sqs_connector.send_file_as_messages(
+        context.sqs_queue_url, filename, line_by_line=False
+    )
+
+@when('I receive messages from SQS queue')
+def step_receive_messages_from_sqs(context):
+    """Receive messages from SQS queue."""
+    logger.info("Receiving messages from SQS queue")
+    max_messages = getattr(context, 'sqs_max_messages', 10)
+    context.sqs_received_messages = context.sqs_connector.receive_messages(
+        context.sqs_queue_url, max_messages
+    )
+
+@when('I receive {max_messages:d} messages from SQS queue')
+def step_receive_n_messages_from_sqs(context, max_messages):
+    """Receive specific number of messages from SQS queue."""
+    logger.info(f"Receiving {max_messages} messages from SQS queue")
+    context.sqs_received_messages = context.sqs_connector.receive_messages(
+        context.sqs_queue_url, max_messages
+    )
+
+@then('SQS message should be sent successfully')
+def step_verify_sqs_message_sent(context):
+    """Verify SQS message was sent successfully."""
+    logger.info("Verifying SQS message sent successfully")
+    assert hasattr(context, 'sqs_send_result'), "No SQS send result available"
+    assert 'MessageId' in context.sqs_send_result, "Message ID not found in send result"
+
+@then('SQS file should be sent with {expected_success:d} successful messages')
+def step_verify_sqs_file_sent(context, expected_success):
+    """Verify SQS file was sent with expected success count."""
+    logger.info(f"Verifying SQS file sent with {expected_success} successful messages")
+    assert hasattr(context, 'sqs_file_result'), "No SQS file result available"
+    actual_success = context.sqs_file_result.get('success_count', 0)
+    assert actual_success == expected_success, f"Expected {expected_success} successful messages, got {actual_success}"
+
+@then('SQS should receive {expected_count:d} messages')
+def step_verify_sqs_received_count(context, expected_count):
+    """Verify expected number of messages received from SQS."""
+    logger.info(f"Verifying SQS received {expected_count} messages")
+    assert hasattr(context, 'sqs_received_messages'), "No SQS received messages available"
+    actual_count = len(context.sqs_received_messages)
+    assert actual_count == expected_count, f"Expected {expected_count} messages, got {actual_count}"
+
+# S3 Step Definitions
+@given('AWS S3 connection is configured')
+def step_s3_connection_configured(context):
+    """Verify AWS S3 connection is configured."""
+    logger.info("Verifying AWS S3 connection configuration")
+    context.s3_connector = s3_connector
+    assert context.s3_connector.s3_client is not None, "S3 client not configured"
+
+@given('S3 bucket is set to "{bucket_name}"')
+def step_set_s3_bucket(context, bucket_name):
+    """Set S3 bucket name for testing."""
+    logger.info(f"Setting S3 bucket: {bucket_name}")
+    context.s3_bucket = bucket_name
+
+@given('S3 prefix is set to "{prefix}"')
+def step_set_s3_prefix(context, prefix):
+    """Set S3 prefix for testing."""
+    logger.info(f"Setting S3 prefix: {prefix}")
+    context.s3_prefix = prefix
+
+@given('local download directory is set to "{directory}"')
+def step_set_local_directory(context, directory):
+    """Set local download directory."""
+    logger.info(f"Setting local download directory: {directory}")
+    context.local_directory = directory
+
+@when('I download file "{s3_key}" from S3 to "{local_path}"')
+def step_download_s3_file(context, s3_key, local_path):
+    """Download single file from S3."""
+    logger.info(f"Downloading S3 file: {s3_key} -> {local_path}")
+    context.s3_download_result = context.s3_connector.download_file(
+        context.s3_bucket, s3_key, local_path
+    )
+
+@when('I download S3 directory to local directory')
+def step_download_s3_directory(context):
+    """Download S3 directory to local directory."""
+    logger.info("Downloading S3 directory to local directory")
+    context.s3_download_results = context.s3_connector.download_directory(
+        context.s3_bucket, 
+        context.s3_prefix, 
+        context.local_directory
+    )
+
+@when('I upload file "{local_path}" to S3 as "{s3_key}"')
+def step_upload_file_to_s3(context, local_path, s3_key):
+    """Upload file to S3."""
+    logger.info(f"Uploading file to S3: {local_path} -> {s3_key}")
+    context.s3_upload_result = context.s3_connector.upload_file(
+        local_path, context.s3_bucket, s3_key
+    )
+
+@when('I list S3 objects with prefix')
+def step_list_s3_objects(context):
+    """List S3 objects with prefix."""
+    logger.info("Listing S3 objects with prefix")
+    context.s3_objects = context.s3_connector.list_objects(
+        context.s3_bucket, context.s3_prefix
+    )
+
+@then('S3 file download should be successful')
+def step_verify_s3_download_success(context):
+    """Verify S3 file download was successful."""
+    logger.info("Verifying S3 file download success")
+    assert hasattr(context, 's3_download_result'), "No S3 download result available"
+    assert context.s3_download_result == True, "S3 file download failed"
+
+@then('S3 directory download should complete with {expected_files:d} files')
+def step_verify_s3_directory_download(context, expected_files):
+    """Verify S3 directory download completed with expected file count."""
+    logger.info(f"Verifying S3 directory download with {expected_files} files")
+    assert hasattr(context, 's3_download_results'), "No S3 download results available"
+    actual_files = context.s3_download_results.get('downloaded_count', 0)
+    assert actual_files == expected_files, f"Expected {expected_files} files, got {actual_files}"
+
+@then('S3 upload should be successful')
+def step_verify_s3_upload_success(context):
+    """Verify S3 upload was successful."""
+    logger.info("Verifying S3 upload success")
+    assert hasattr(context, 's3_upload_result'), "No S3 upload result available"
+    assert context.s3_upload_result == True, "S3 upload failed"
+
+# AWS-SQL Integration Step Definitions
+@given('AWS-SQL integration is configured')
+def step_aws_sql_integration_configured(context):
+    """Verify AWS-SQL integration is configured."""
+    logger.info("Verifying AWS-SQL integration configuration")
+    context.aws_sql_integration = aws_sql_integration
+
+@given('message table "{table_name}" exists in "{environment}" {db_type} database')
+def step_ensure_message_table_exists(context, table_name, environment, db_type):
+    """Ensure message table exists in database."""
+    logger.info(f"Ensuring message table exists: {table_name}")
+    context.message_table = table_name
+    context.db_environment = environment
+    context.db_type = db_type
+    
+    # Create table if it doesn't exist
+    context.aws_sql_integration.create_message_table(
+        environment, db_type, table_name
+    )
+
+@when('I process SQS queue to SQL database')
+def step_process_sqs_to_sql(context):
+    """Process SQS queue messages to SQL database."""
+    logger.info("Processing SQS queue to SQL database")
+    context.process_results = context.aws_sql_integration.process_queue_to_sql(
+        context.sqs_queue_url,
+        context.db_environment,
+        context.db_type,
+        table_name=context.message_table
+    )
+
+@when('I save SQS messages to SQL database')
+def step_save_sqs_messages_to_sql(context):
+    """Save received SQS messages to SQL database."""
+    logger.info("Saving SQS messages to SQL database")
+    messages = getattr(context, 'sqs_received_messages', [])
+    context.save_results = context.aws_sql_integration.save_messages_to_sql(
+        messages,
+        context.db_environment,
+        context.db_type,
+        context.sqs_queue_url,
+        context.message_table
+    )
+
+@when('I export messages from SQL to file "{filename}"')
+def step_export_messages_to_file(context, filename):
+    """Export messages from SQL database to file."""
+    logger.info(f"Exporting messages from SQL to file: {filename}")
+    context.export_results = context.aws_sql_integration.export_messages_to_file_from_sql(
+        context.db_environment,
+        context.db_type,
+        filename,
+        table_name=context.message_table
+    )
+
+@then('SQS messages should be saved to SQL successfully')
+def step_verify_sqs_sql_save(context):
+    """Verify SQS messages were saved to SQL successfully."""
+    logger.info("Verifying SQS messages saved to SQL successfully")
+    assert hasattr(context, 'save_results'), "No save results available"
+    assert context.save_results['success_count'] > 0, "No messages were saved successfully"
+
+@then('SQL message export should be successful')
+def step_verify_sql_export_success(context):
+    """Verify SQL message export was successful."""
+    logger.info("Verifying SQL message export success")
+    assert hasattr(context, 'export_results'), "No export results available"
+    assert context.export_results['success'] == True, "SQL message export failed"
+
+@then('exported file should contain {expected_messages:d} messages')
+def step_verify_exported_message_count(context, expected_messages):
+    """Verify exported file contains expected number of messages."""
+    logger.info(f"Verifying exported file contains {expected_messages} messages")
+    assert hasattr(context, 'export_results'), "No export results available"
+    actual_messages = context.export_results.get('messages_exported', 0)
+    assert actual_messages == expected_messages, f"Expected {expected_messages} messages, got {actual_messages}"
+
+# Connection Test Steps
+@then('AWS SQS connection should be successful')
+def step_verify_sqs_connection(context):
+    """Verify AWS SQS connection is successful."""
+    logger.info("Verifying AWS SQS connection")
+    queue_url = getattr(context, 'sqs_queue_url', None)
+    success = context.sqs_connector.test_connection(queue_url)
+    assert success, "AWS SQS connection test failed"
+
+@then('AWS S3 connection should be successful')
+def step_verify_s3_connection(context):
+    """Verify AWS S3 connection is successful."""
+    logger.info("Verifying AWS S3 connection")
+    bucket_name = getattr(context, 's3_bucket', None)
+    success = context.s3_connector.test_connection(bucket_name)
+    assert success, "AWS S3 connection test failed"
