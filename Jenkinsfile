@@ -353,3 +353,91 @@ pipeline {
                     <p><strong>Build Number:</strong> ${env.BUILD_NUMBER}</p>
                     <p><strong>Duration:</strong> ${currentBuild.durationString}</p>
                     <p><strong>Console Output:</strong> <a href="${env.BUILD_URL}console">View Logs</a></p>
+                    <p><strong>Test Reports:</strong> <a href="${env.BUILD_URL}Test_20Reports/">View Reports</a></p>
+                """,
+                mimeType: 'text/html',
+                to: "${env.CHANGE_AUTHOR_EMAIL ?: 'team@company.com'}"
+            )
+        }
+        
+        failure {
+            echo "❌ Pipeline failed!"
+            
+            // Send failure notification
+            emailext (
+                subject: "❌ Failed: ${env.JOB_NAME} - Build ${env.BUILD_NUMBER}",
+                body: """
+                    <h3>Build Failed! ⚠️</h3>
+                    <p><strong>Job:</strong> ${env.JOB_NAME}</p>
+                    <p><strong>Build Number:</strong> ${env.BUILD_NUMBER}</p>
+                    <p><strong>Duration:</strong> ${currentBuild.durationString}</p>
+                    <p><strong>Console Output:</strong> <a href="${env.BUILD_URL}console">View Logs</a></p>
+                    <p><strong>Test Reports:</strong> <a href="${env.BUILD_URL}Test_20Reports/">View Reports</a></p>
+                    <p><strong>Changes:</strong></p>
+                    <ul>
+                    ${currentBuild.changeSets.collect { cs ->
+                        cs.collect { entry ->
+                            "<li><strong>${entry.author}</strong>: ${entry.msg}</li>"
+                        }.join('')
+                    }.join('')}
+                    </ul>
+                """,
+                mimeType: 'text/html',
+                to: "${env.CHANGE_AUTHOR_EMAIL ?: 'team@company.com'}",
+                attachLog: true
+            )
+        }
+        
+        unstable {
+            echo "⚠️ Pipeline completed with test failures"
+            
+            // Send unstable notification
+            emailext (
+                subject: "⚠️ Unstable: ${env.JOB_NAME} - Build ${env.BUILD_NUMBER}",
+                body: """
+                    <h3>Build Unstable (Test Failures) ⚠️</h3>
+                    <p><strong>Job:</strong> ${env.JOB_NAME}</p>
+                    <p><strong>Build Number:</strong> ${env.BUILD_NUMBER}</p>
+                    <p><strong>Duration:</strong> ${currentBuild.durationString}</p>
+                    <p><strong>Console Output:</strong> <a href="${env.BUILD_URL}console">View Logs</a></p>
+                    <p><strong>Test Reports:</strong> <a href="${env.BUILD_URL}Test_20Reports/">View Reports</a></p>
+                    <p>Some tests failed but the build completed. Please review the test reports.</p>
+                """,
+                mimeType: 'text/html',
+                to: "${env.CHANGE_AUTHOR_EMAIL ?: 'team@company.com'}"
+            )
+        }
+    }
+}
+
+// Pipeline parameters
+def call() {
+    // Define build parameters
+    parameters {
+        booleanParam(
+            name: 'RUN_AWS_TESTS',
+            defaultValue: false,
+            description: 'Run AWS integration tests (requires valid AWS credentials)'
+        )
+        booleanParam(
+            name: 'RUN_PERFORMANCE_TESTS',
+            defaultValue: false,
+            description: 'Run performance tests (can take longer)'
+        )
+        choice(
+            name: 'TEST_ENVIRONMENT',
+            choices: ['DEV', 'QA', 'STAGING'],
+            description: 'Target environment for testing'
+        )
+        choice(
+            name: 'LOG_LEVEL',
+            choices: ['INFO', 'DEBUG', 'WARNING', 'ERROR'],
+            description: 'Logging level for test execution'
+        )
+        string(
+            name: 'BEHAVE_TAGS',
+            defaultValue: '@smoke',
+            description: 'Behave tags to run (e.g., @smoke, @regression, "@database and @critical")'
+        )
+    }
+}
