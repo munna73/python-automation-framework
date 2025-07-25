@@ -1,244 +1,341 @@
-"""
-Database-related step definitions for Behave - CORRECTED VERSION.
-"""
-from behave import given, when, then
+"""Enhanced database steps for BDD testing with proper typing and error handling."""
+from typing import Dict, List, Any, Optional
+from behave import given, when, then, step
+from behave.runner import Context
+import json
+import pandas as pd
+from datetime import datetime
+import logging
+
 from db.database_connector import db_connector
-from db.data_comparator import data_comparator
-from utils.logger import logger, db_logger
+from db.data_comparator import DataComparator
+from utils.custom_exceptions import (
+    DatabaseConnectionError, 
+    QueryExecutionError, 
+    DataValidationError,
+    ComparisonError
+)
+from utils.logger import logger
+from utils.config_loader import config_loader
 
-@given('I connect to "{environment}" Oracle database')
-def step_connect_oracle_database(context, environment):
-    """Connect to Oracle database."""
-    db_logger.info(f"Connecting to {environment} Oracle database")
-    context.db_environment = environment
-    context.db_type = 'ORACLE'
-    context.db_connector = db_connector
-    # Test connection
-    context.oracle_connection = context.db_connector.connect_oracle(environment)
 
-@given('I connect to "{environment}" PostgreSQL database')
-def step_connect_postgresql_database(context, environment):
-    """Connect to PostgreSQL database."""
-    db_logger.info(f"Connecting to {environment} PostgreSQL database")
-    context.db_environment = environment
-    context.db_type = 'POSTGRES'
-    context.db_connector = db_connector
-    # Test connection
-    context.postgres_connection = context.db_connector.connect_postgresql(environment)
+class DatabaseContext:
+    """Helper class to manage database context in BDD steps."""
+    
+    def __init__(self, context: Context):
+        self.context = context
+        self._ensure_db_context()
+    
+    def _ensure_db_context(self) -> None:
+        """Ensure database context exists."""
+        if not hasattr(self.context, 'db'):
+            self.context.db = {}
+        if not hasattr(self.context, 'query_results'):
+            self.context.query_results = {}
+        if not hasattr(self.context, 'comparison_results'):
+            self.context.comparison_results = {}
+    
+    def store_connection(self, env: str, db_type: str, connection: Any) -> None:
+        """Store database connection in context."""
+        key = f"{env}_{db_type}"
+        self.context.db[key] = connection
+        logger.info(f"Stored connection for {key}")
+    
+    def get_connection(self, env: str, db_type: str) -> Any:
+        """Get database connection from context."""
+        key = f"{env}_{db_type}"
+        if key not in self.context.db:
+            raise DatabaseConnectionError(f"No connection found for {key}")
+        return self.context.db[key]
+    
+    def store_results(self, key: str, results: List[Dict[str, Any]]) -> None:
+        """Store query results in context."""
+        self.context.query_results[key] = results
+        logger.info(f"Stored {len(results)} results for key: {key}")
+    
+    def get_results(self, key: str) -> List[Dict[str, Any]]:
+        """Get query results from context."""
+        if key not in self.context.query_results:
+            raise DataValidationError(f"No results found for key: {key}")
+        return self.context.query_results[key]
 
-@given('I connect to "{environment}" {db_type} database')
-def step_connect_any_database(context, environment, db_type):
-    """Connect to any specified database type."""
-    db_logger.info(f"Connecting to {environment} {db_type} database")
-    context.db_environment = environment
-    context.db_type = db_type.upper()
-    context.db_connector = db_connector
-    
-    if db_type.upper() == 'ORACLE':
-        context.db_connection = context.db_connector.connect_oracle(environment)
-    elif db_type.upper() in ['POSTGRES', 'POSTGRESQL']:
-        context.db_connection = context.db_connector.connect_postgresql(environment)
-    else:
-        raise ValueError(f"Unsupported database type: {db_type}")
 
-@when('I execute customer comparison query')
-def step_execute_comparison_query(context):
-    """Execute customer comparison query."""
-    db_logger.info("Executing customer comparison query")
+@given('I connect to "{env}" "{db_type}" database')
+def step_connect_to_database(context: Context, env: str, db_type: str) -> None:
+    """
+    Connect to a database.
     
-    # Get the query from config
-    from utils.config_loader import config_loader
-    query = config_loader.get_query('customer_comparison')
+    Args:
+        context: Behave context
+        env: Environment (DEV, QA, PROD)
+        db_type: Database type (ORACLE, POSTGRES)
+    """
+    db_context = DatabaseContext(context)
     
-    # Execute query with date parameters (last 24 hours by default)
-    from datetime import datetime, timedelta
-    end_date = datetime.now()
-    start_date = end_date - timedelta(hours=24)
-    
-    params = {
-        'start_date': start_date,
-        'end_date': end_date
-    }
-    
-    context.query_result = context.db_connector.execute_query(
-        context.db_environment,
-        context.db_type,
-        query,
-        params
-    )
-
-@when('I execute comparison query with window "{window_minutes:d}" minutes')
-def step_execute_windowed_query(context, window_minutes):
-    """Execute query with time window."""
-    db_logger.info(f"Executing query with {window_minutes} minute window")
-    
-    from utils.config_loader import config_loader
-    from datetime import datetime, timedelta
-    
-    query = config_loader.get_query('customer_comparison')
-    end_date = datetime.now()
-    start_date = end_date - timedelta(hours=24)
-    
-    context.query_result = context.db_connector.execute_chunked_query(
-        context.db_environment,
-        context.db_type,
-        query,
-        'created_date',  # Date column for chunking
-        start_date,
-        end_date,
-        window_minutes
-    )
-
-@when('I execute "{query_name}" query')
-def step_execute_named_query(context, query_name):
-    """Execute a named query from configuration."""
-    db_logger.info(f"Executing {query_name} query")
-    
-    from utils.config_loader import config_loader
-    from datetime import datetime, timedelta
-    
-    query = config_loader.get_query(query_name)
-    
-    # Default date parameters
-    end_date = datetime.now()
-    start_date = end_date - timedelta(hours=24)
-    
-    params = {
-        'start_date': start_date,
-        'end_date': end_date,
-        'last_sync_date': start_date
-    }
-    
-    context.query_result = context.db_connector.execute_query(
-        context.db_environment,
-        context.db_type,
-        query,
-        params
-    )
-
-@then('the data should match within acceptable thresholds')
-def step_verify_data_match(context):
-    """Verify data matches within thresholds."""
-    db_logger.info("Verifying data match within thresholds")
-    assert hasattr(context, 'query_result'), "No query result available"
-    assert context.query_result is not None, "Query result is None"
-    # Basic validation - query should return some data
-    assert len(context.query_result) >= 0, "Query result should be a valid DataFrame"
-
-@then('differences should be exported to Excel')
-def step_export_differences(context):
-    """Export differences to Excel file."""
-    db_logger.info("Exporting differences to Excel")
-    
-    if hasattr(context, 'comparison_results'):
-        # Export comparison results
-        exported_file = data_comparator.export_comparison_results(
-            context.comparison_name, 'excel'
-        )
-        context.exported_file = exported_file
-        db_logger.info(f"Exported differences to: {exported_file}")
-    else:
-        # Export query results
-        from utils.export_utils import export_utils
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"query_results_{timestamp}.xlsx"
-        filepath = f"output/exports/{filename}"
+    try:
+        logger.info(f"Connecting to {env} {db_type} database")
+        config = config_loader.get_database_config(env, db_type)
         
-        success = export_utils.write_single_dataframe_to_excel(
-            context.query_result, filepath, "Query_Results"
+        connection = db_connector.connect(
+            db_type=db_type,
+            host=config.host,
+            port=config.port,
+            database=config.database,
+            username=config.username,
+            password=config.password
         )
-        assert success, "Failed to export query results to Excel"
-        context.exported_file = filepath
-
-@then('the results should be processed successfully')
-def step_verify_processing(context):
-    """Verify results processed successfully."""
-    db_logger.info("Verifying successful processing")
-    assert hasattr(context, 'query_result'), "No query result available"
-    assert context.query_result is not None, "Query result is None"
-
-@then('export should handle CLOB data properly')
-def step_verify_clob_handling(context):
-    """Verify CLOB data handling."""
-    db_logger.info("Verifying CLOB data handling")
-    # Check if any columns might contain CLOB data
-    if hasattr(context, 'query_result') and not context.query_result.empty:
-        # Look for text columns that might be CLOB
-        text_columns = []
-        for col in context.query_result.columns:
-            if context.query_result[col].dtype == 'object':
-                # Check if any values are very long (potential CLOB)
-                max_length = context.query_result[col].astype(str).str.len().max()
-                if max_length > 1000:  # Threshold for CLOB detection
-                    text_columns.append(col)
         
-        if text_columns:
-            db_logger.info(f"Detected potential CLOB columns: {text_columns}")
-            # CLOB handling will be applied during export
+        db_context.store_connection(env, db_type, connection)
+        logger.info(f"Successfully connected to {env} {db_type} database")
+        
+    except Exception as e:
+        logger.error(f"Failed to connect to {env} {db_type}: {str(e)}")
+        raise DatabaseConnectionError(f"Connection failed: {str(e)}")
+
+
+@when('I execute query "{query}" on "{env}" "{db_type}" database')
+def step_execute_query(context: Context, query: str, env: str, db_type: str) -> None:
+    """Execute a query on specified database."""
+    db_context = DatabaseContext(context)
+    
+    try:
+        connection = db_context.get_connection(env, db_type)
+        
+        # Handle multi-line queries from feature files
+        if context.text:
+            query = context.text
+        
+        logger.info(f"Executing query on {env} {db_type}: {query[:100]}...")
+        results = db_connector.execute_query(connection, query)
+        
+        # Store results with a unique key
+        result_key = f"{env}_{db_type}_latest"
+        db_context.store_results(result_key, results)
+        
+    except Exception as e:
+        logger.error(f"Query execution failed: {str(e)}")
+        raise QueryExecutionError(f"Query failed: {str(e)}", query=query)
+
+
+@when('I execute query from file "{filename}" on "{env}" "{db_type}" database')
+def step_execute_query_from_file(context: Context, filename: str, env: str, db_type: str) -> None:
+    """Execute a query from a SQL file."""
+    db_context = DatabaseContext(context)
+    
+    try:
+        with open(f"sql/{filename}", 'r') as f:
+            query = f.read()
+        
+        connection = db_context.get_connection(env, db_type)
+        logger.info(f"Executing query from {filename} on {env} {db_type}")
+        
+        results = db_connector.execute_query(connection, query)
+        
+        # Store with filename as part of key
+        result_key = f"{env}_{db_type}_{filename.replace('.sql', '')}"
+        db_context.store_results(result_key, results)
+        
+    except FileNotFoundError:
+        raise DataValidationError(f"SQL file not found: {filename}")
+    except Exception as e:
+        logger.error(f"Failed to execute query from file: {str(e)}")
+        raise QueryExecutionError(f"Query from file failed: {str(e)}", query=filename)
+
+
+@when('I execute parameterized query on "{env}" "{db_type}" database')
+def step_execute_parameterized_query(context: Context, env: str, db_type: str) -> None:
+    """Execute a parameterized query with parameters from table."""
+    db_context = DatabaseContext(context)
+    
+    if not context.table:
+        raise DataValidationError("No parameters provided for parameterized query")
+    
+    try:
+        # Extract query and parameters
+        query = context.text
+        params = dict(context.table[0])
+        
+        connection = db_context.get_connection(env, db_type)
+        logger.info(f"Executing parameterized query with params: {params}")
+        
+        results = db_connector.execute_query(connection, query, params)
+        
+        result_key = f"{env}_{db_type}_parameterized"
+        db_context.store_results(result_key, results)
+        
+    except Exception as e:
+        logger.error(f"Parameterized query failed: {str(e)}")
+        raise QueryExecutionError(f"Parameterized query failed: {str(e)}", query=query, params=params)
+
+
+@then('the query result should have {expected_count:d} rows')
+def step_verify_row_count(context: Context, expected_count: int) -> None:
+    """Verify the number of rows in query result."""
+    db_context = DatabaseContext(context)
+    
+    # Get the latest results
+    results = list(db_context.context.query_results.values())[-1]
+    actual_count = len(results)
+    
+    if actual_count != expected_count:
+        raise DataValidationError(
+            f"Row count mismatch. Expected: {expected_count}, Actual: {actual_count}"
+        )
+    
+    logger.info(f"Row count verification passed: {actual_count} rows")
+
+
+@then('the query result should contain')
+def step_verify_result_contains(context: Context) -> None:
+    """Verify query results contain expected data from table."""
+    db_context = DatabaseContext(context)
+    
+    if not context.table:
+        raise DataValidationError("No expected data provided")
+    
+    # Get the latest results
+    results = list(db_context.context.query_results.values())[-1]
+    
+    for expected_row in context.table:
+        expected_dict = dict(expected_row)
+        
+        # Check if any result matches the expected row
+        match_found = any(
+            all(str(result.get(k)) == str(v) for k, v in expected_dict.items())
+            for result in results
+        )
+        
+        if not match_found:
+            raise DataValidationError(f"Expected row not found in results: {expected_dict}")
+    
+    logger.info("Result content verification passed")
+
+
+@then('the query result should be empty')
+def step_verify_empty_result(context: Context) -> None:
+    """Verify query result is empty."""
+    db_context = DatabaseContext(context)
+    
+    results = list(db_context.context.query_results.values())[-1]
+    
+    if results:
+        raise DataValidationError(f"Expected empty result, but got {len(results)} rows")
+    
+    logger.info("Empty result verification passed")
+
+
+@when('I compare data between "{source_env}" and "{target_env}" for "{db_type}" using query')
+def step_compare_data_between_environments(
+    context: Context, source_env: str, target_env: str, db_type: str
+) -> None:
+    """Compare data between two environments."""
+    db_context = DatabaseContext(context)
+    
+    try:
+        query = context.text
+        if not query:
+            raise DataValidationError("No query provided for comparison")
+        
+        # Execute query in both environments
+        source_conn = db_context.get_connection(source_env, db_type)
+        target_conn = db_context.get_connection(target_env, db_type)
+        
+        logger.info(f"Executing comparison query in {source_env} and {target_env}")
+        
+        source_results = db_connector.execute_query(source_conn, query)
+        target_results = db_connector.execute_query(target_conn, query)
+        
+        # Store individual results
+        db_context.store_results(f"{source_env}_{db_type}_comparison", source_results)
+        db_context.store_results(f"{target_env}_{db_type}_comparison", target_results)
+        
+        # Perform comparison
+        comparator = DataComparator()
+        comparison = comparator.compare_datasets(
+            source_results, 
+            target_results,
+            source_name=source_env,
+            target_name=target_env
+        )
+        
+        # Store comparison results
+        db_context.context.comparison_results['latest'] = comparison
+        
+    except Exception as e:
+        logger.error(f"Data comparison failed: {str(e)}")
+        raise ComparisonError(f"Comparison failed: {str(e)}")
+
+
+@then('the data comparison should show no differences')
+def step_verify_no_differences(context: Context) -> None:
+    """Verify that data comparison shows no differences."""
+    db_context = DatabaseContext(context)
+    
+    if 'latest' not in db_context.context.comparison_results:
+        raise DataValidationError("No comparison results found")
+    
+    comparison = db_context.context.comparison_results['latest']
+    
+    if comparison['differences_count'] > 0:
+        raise ComparisonError(
+            f"Found {comparison['differences_count']} differences in data comparison",
+            source_data=comparison.get('source_only', []),
+            target_data=comparison.get('target_only', [])
+        )
+    
+    logger.info("Data comparison passed - no differences found")
+
+
+@then('I export the query results to "{format}" file "{filename}"')
+def step_export_results(context: Context, format: str, filename: str) -> None:
+    """Export query results to file."""
+    db_context = DatabaseContext(context)
+    
+    try:
+        # Get the latest results
+        results = list(db_context.context.query_results.values())[-1]
+        
+        if not results:
+            logger.warning("No results to export")
+            return
+        
+        df = pd.DataFrame(results)
+        output_path = f"output/{filename}"
+        
+        if format.lower() == 'csv':
+            df.to_csv(output_path, index=False)
+        elif format.lower() == 'excel':
+            df.to_excel(output_path, index=False, engine='xlsxwriter')
+        elif format.lower() == 'json':
+            df.to_json(output_path, orient='records', indent=2)
         else:
-            db_logger.info("No CLOB data detected in results")
+            raise DataValidationError(f"Unsupported export format: {format}")
+        
+        logger.info(f"Exported {len(results)} rows to {output_path}")
+        
+    except Exception as e:
+        logger.error(f"Export failed: {str(e)}")
+        raise DataValidationError(f"Failed to export results: {str(e)}")
 
-@then('query should return {expected_count:d} or more records')
-def step_verify_minimum_record_count(context, expected_count):
-    """Verify query returns minimum number of records."""
-    db_logger.info(f"Verifying query returns at least {expected_count} records")
-    assert hasattr(context, 'query_result'), "No query result available"
-    actual_count = len(context.query_result)
-    assert actual_count >= expected_count, f"Expected at least {expected_count} records, got {actual_count}"
 
-@then('query should complete within {max_seconds:d} seconds')
-def step_verify_query_performance(context, max_seconds):
-    """Verify query completes within time limit."""
-    db_logger.info(f"Verifying query completes within {max_seconds} seconds")
-    # This would need to be implemented with timing in the query execution steps
-    # For now, just verify we have results (indicating query completed)
-    assert hasattr(context, 'query_result'), "No query result available - query may have timed out"
-
-@given('I have source data from "{source_env}" {source_db_type} database')
-def step_prepare_source_data(context, source_env, source_db_type):
-    """Prepare source data for comparison."""
-    db_logger.info(f"Preparing source data from {source_env} {source_db_type}")
-    context.source_env = source_env
-    context.source_db_type = source_db_type.upper()
-
-@given('I have target data from "{target_env}" {target_db_type} database')
-def step_prepare_target_data(context, target_env, target_db_type):
-    """Prepare target data for comparison."""
-    db_logger.info(f"Preparing target data from {target_env} {target_db_type}")
-    context.target_env = target_env
-    context.target_db_type = target_db_type.upper()
-
-@when('I compare the datasets using primary key "{primary_key}"')
-def step_compare_datasets(context, primary_key):
-    """Compare datasets from source and target."""
-    db_logger.info(f"Comparing datasets using primary key: {primary_key}")
+@step('I close all database connections')
+def step_close_all_connections(context: Context) -> None:
+    """Close all open database connections."""
+    db_context = DatabaseContext(context)
     
-    # This step assumes source and target data have been loaded
-    # You would need to implement the data loading in previous steps
-    
-    comparison_name = f"{context.source_env}_{context.source_db_type}_vs_{context.target_env}_{context.target_db_type}"
-    
-    # For now, create dummy DataFrames for demonstration
-    # In real implementation, this would use actual query results
-    import pandas as pd
-    source_df = getattr(context, 'source_data', pd.DataFrame())
-    target_df = getattr(context, 'target_data', pd.DataFrame())
-    
-    if not source_df.empty and not target_df.empty:
-        context.comparison_results = data_comparator.compare_dataframes(
-            source_df, target_df, primary_key, comparison_name
-        )
-        context.comparison_name = comparison_name
-    else:
-        db_logger.warning("Source or target data is empty, skipping comparison")
+    if hasattr(db_context.context, 'db'):
+        for key, connection in db_context.context.db.items():
+            try:
+                db_connector.disconnect(connection)
+                logger.info(f"Closed connection: {key}")
+            except Exception as e:
+                logger.warning(f"Failed to close connection {key}: {str(e)}")
+        
+        # Clear the connections
+        db_context.context.db.clear()
 
-@then('comparison should show {expected_match_percentage:d}% or higher match rate')
-def step_verify_match_percentage(context, expected_match_percentage):
-    """Verify comparison match percentage."""
-    db_logger.info(f"Verifying match percentage is {expected_match_percentage}% or higher")
-    
-    if hasattr(context, 'comparison_results'):
-        actual_match = context.comparison_results['match_percentage']
-        assert actual_match >= expected_match_percentage, f"Match percentage {actual_match:.2f}% is below expected {expected_match_percentage}%"
-    else:
-        db_logger.warning("No comparison results available to verify match percentage")
+
+# Hook to ensure connections are closed after scenario
+def after_scenario(context: Context, scenario) -> None:
+    """Clean up database connections after each scenario."""
+    step_close_all_connections(context)

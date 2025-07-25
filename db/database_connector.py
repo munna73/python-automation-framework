@@ -1,314 +1,485 @@
-"""
-Database connection utilities for Oracle and PostgreSQL.
-"""
-import pandas as pd
+"""Enhanced database connector with improved error handling and connection pooling."""
 import cx_Oracle
 import psycopg2
-from sqlalchemy import create_engine
-from datetime import datetime, timedelta
-from typing import Dict, Any, Optional, List
-from utils.config_loader import config_loader
-from utils.logger import logger, db_logger
+from psycopg2.extras import RealDictCursor
+from typing import Dict, List, Any, Optional, Union, Tuple
+import logging
+from contextlib import contextmanager
+from datetime import datetime
+import time
+import json
 
-class DatabaseConnector:
-    """Database connection and query execution utility."""
+from db.base_connector import BaseConnector
+from utils.custom_exceptions import DatabaseConnectionError, QueryExecutionError
+from utils.logger import logger
+
+
+class OracleConnector(BaseConnector):
+    """Oracle database connector implementation."""
     
-    def __init__(self):
-        """Initialize database connector."""
-        self.connections = {}
-        self.engines = {}
+    def __init__(self, config: Dict[str, Any], logger: Optional[logging.Logger] = None):
+        super().__init__(config, logger)
+        self.connection_pool = None
     
-    def connect_oracle(self, environment: str) -> cx_Oracle.Connection:
-        """
-        Connect to Oracle database.
-        
-        Args:
-            environment: Environment name (DEV, QA, PROD)
-            
-        Returns:
-            Oracle database connection
-        """
+    def connect(self) -> None:
+        """Establish Oracle database connection with connection pooling."""
         try:
-            config = config_loader.get_database_config(environment, 'ORACLE')
-            
-            connection_string = (
-                f"{config['username']}/{config['password']}@"
-                f"{config['host']}:{config['port']}/{config['service_name']}"
+            # Create connection pool for better performance
+            self.connection_pool = cx_Oracle.SessionPool(
+                user=self.config['username'],
+                password=self.config['password'],
+                dsn=f"{self.config['host']}:{self.config['port']}/{self.config['database']}",
+                min=2,
+                max=self.config.get('pool_size', 5),
+                increment=1,
+                encoding="UTF-8"
             )
             
-            connection = cx_Oracle.connect(connection_string)
-            self.connections[f"{environment}_ORACLE"] = connection
+            # Test connection
+            with self.connection_pool.acquire() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1 FROM DUAL")
+                cursor.close()
             
-            db_logger.info(f"Connected to Oracle database: {environment}")
-            return connection
+            self._connection_time = datetime.now()
+            self.logger.info("Oracle connection pool established successfully")
             
-        except Exception as e:
-            db_logger.error(f"Failed to connect to Oracle {environment}: {e}")
-            raise
+        except cx_Oracle.Error as e:
+            error_msg = f"Oracle connection failed: {str(e)}"
+            self.logger.error(error_msg)
+            raise DatabaseConnectionError(error_msg, db_type="ORACLE", 
+                                        environment=self.config.get('environment'))
     
-    def connect_postgresql(self, environment: str) -> psycopg2.extensions.connection:
-        """
-        Connect to PostgreSQL database.
-        
-        Args:
-            environment: Environment name (DEV, QA, PROD)
-            
-        Returns:
-            PostgreSQL database connection
-        """
-        try:
-            config = config_loader.get_database_config(environment, 'POSTGRES')
-            
-            connection = psycopg2.connect(
-                host=config['host'],
-                port=config['port'],
-                database=config['database'],
-                user=config['username'],
-                password=config['password']
-            )
-            
-            self.connections[f"{environment}_POSTGRES"] = connection
-            
-            db_logger.info(f"Connected to PostgreSQL database: {environment}")
-            return connection
-            
-        except Exception as e:
-            db_logger.error(f"Failed to connect to PostgreSQL {environment}: {e}")
-            raise
+    def disconnect(self) -> None:
+        """Close Oracle connection pool."""
+        if self.connection_pool:
+            try:
+                self.connection_pool.close()
+                self.logger.info("Oracle connection pool closed")
+            except Exception as e:
+                self.logger.warning(f"Error closing Oracle connection pool: {str(e)}")
     
-    def get_sqlalchemy_engine(self, environment: str, db_type: str):
-        """
-        Get SQLAlchemy engine for pandas operations.
+    def execute_query(self, query: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Execute Oracle query and return results as list of dictionaries."""
+        if not self.connection_pool:
+            raise DatabaseConnectionError("No active Oracle connection")
         
-        Args:
-            environment: Environment name (DEV, QA, PROD)
-            db_type: Database type (ORACLE, POSTGRES)
-            
-        Returns:
-            SQLAlchemy engine
-        """
-        engine_key = f"{environment}_{db_type}"
-        
-        if engine_key in self.engines:
-            return self.engines[engine_key]
+        results = []
+        start_time = time.time()
         
         try:
-            config = config_loader.get_database_config(environment, db_type)
+            with self.connection_pool.acquire() as conn:
+                cursor = conn.cursor()
+                
+                # Enable array fetching for better performance
+                cursor.arraysize = 1000
+                
+                if params:
+                    cursor.execute(query, params)
+                else:
+                    cursor.execute(query)
+                
+                # Get column names
+                columns = [desc[0].lower() for desc in cursor.description] if cursor.description else []
+                
+                # Fetch all results
+                for row in cursor:
+                    results.append(dict(zip(columns, self._convert_oracle_types(row))))
+                
+                cursor.close()
             
-            if db_type.upper() == 'ORACLE':
-                connection_string = (
-                    f"oracle+cx_oracle://{config['username']}:{config['password']}@"
-                    f"{config['host']}:{config['port']}/{config['service_name']}"
-                )
-            else:  # PostgreSQL
-                connection_string = (
-                    f"postgresql+psycopg2://{config['username']}:{config['password']}@"
-                    f"{config['host']}:{config['port']}/{config['database']}"
-                )
+            execution_time = time.time() - start_time
+            self._log_query_execution(query, execution_time, len(results))
+            return results
             
-            engine = create_engine(connection_string)
-            self.engines[engine_key] = engine
-            
-            db_logger.info(f"Created SQLAlchemy engine: {engine_key}")
-            return engine
-            
-        except Exception as e:
-            db_logger.error(f"Failed to create SQLAlchemy engine for {engine_key}: {e}")
-            raise
+        except cx_Oracle.Error as e:
+            error_msg = f"Oracle query execution failed: {str(e)}"
+            self.logger.error(error_msg)
+            raise QueryExecutionError(error_msg, query=query, params=params)
     
-    def execute_query(self, 
-                     environment: str, 
-                     db_type: str, 
-                     query: str,
-                     params: Dict[str, Any] = None) -> pd.DataFrame:
-        """
-        Execute SQL query and return results as DataFrame.
+    def execute_many(self, query: str, data: List[Tuple]) -> int:
+        """Execute bulk operations in Oracle."""
+        if not self.connection_pool:
+            raise DatabaseConnectionError("No active Oracle connection")
         
-        Args:
-            environment: Environment name
-            db_type: Database type (ORACLE, POSTGRES)
-            query: SQL query to execute
-            params: Query parameters
-            
-        Returns:
-            Query results as pandas DataFrame
-        """
         try:
-            engine = self.get_sqlalchemy_engine(environment, db_type)
+            with self.connection_pool.acquire() as conn:
+                cursor = conn.cursor()
+                cursor.executemany(query, data)
+                conn.commit()
+                
+                affected_rows = cursor.rowcount
+                cursor.close()
+                
+            self.logger.info(f"Bulk operation executed successfully, affected {affected_rows} rows")
+            return affected_rows
             
-            db_logger.info(f"Executing query on {environment} {db_type}")
-            db_logger.debug(f"Query: {query}")
-            db_logger.debug(f"Parameters: {params}")
-            
-            df = pd.read_sql_query(query, engine, params=params)
-            
-            db_logger.info(f"Query executed successfully - {len(df)} rows returned")
-            return df
-            
-        except Exception as e:
-            db_logger.error(f"Query execution failed on {environment} {db_type}: {e}")
-            raise
+        except cx_Oracle.Error as e:
+            error_msg = f"Oracle bulk operation failed: {str(e)}"
+            self.logger.error(error_msg)
+            raise QueryExecutionError(error_msg, query=query)
     
-    def execute_chunked_query(self,
-                            environment: str,
-                            db_type: str,
-                            query: str,
-                            date_column: str,
-                            start_date: datetime,
-                            end_date: datetime,
-                            window_minutes: int = 60) -> pd.DataFrame:
-        """
-        Execute query in time-based chunks to handle large datasets.
+    def execute_procedure(self, procedure_name: str, params: Optional[List[Any]] = None) -> Any:
+        """Execute Oracle stored procedure."""
+        if not self.connection_pool:
+            raise DatabaseConnectionError("No active Oracle connection")
         
-        Args:
-            environment: Environment name
-            db_type: Database type
-            query: SQL query with :start_date and :end_date parameters
-            date_column: Name of the date column for chunking
-            start_date: Query start date
-            end_date: Query end date
-            window_minutes: Time window size in minutes
-            
-        Returns:
-            Combined DataFrame from all chunks
-        """
         try:
-            db_logger.info(f"Starting chunked query execution - {window_minutes} minute windows")
+            with self.connection_pool.acquire() as conn:
+                cursor = conn.cursor()
+                
+                if params:
+                    cursor.callproc(procedure_name, params)
+                else:
+                    cursor.callproc(procedure_name)
+                
+                # Get any output parameters
+                result = cursor.var(cx_Oracle.STRING)
+                cursor.close()
+                
+            self.logger.info(f"Procedure {procedure_name} executed successfully")
+            return result.getvalue() if result else None
             
-            chunks = []
-            current_start = start_date
-            window_delta = timedelta(minutes=window_minutes)
-            
-            while current_start < end_date:
-                current_end = min(current_start + window_delta, end_date)
-                
-                db_logger.debug(f"Processing chunk: {current_start} to {current_end}")
-                
-                chunk_params = {
-                    'start_date': current_start,
-                    'end_date': current_end
-                }
-                
-                chunk_df = self.execute_query(environment, db_type, query, chunk_params)
-                
-                if not chunk_df.empty:
-                    chunks.append(chunk_df)
-                    db_logger.debug(f"Chunk returned {len(chunk_df)} rows")
-                
-                current_start = current_end
-            
-            if chunks:
-                combined_df = pd.concat(chunks, ignore_index=True)
-                db_logger.info(f"Chunked query completed - {len(combined_df)} total rows")
-                return combined_df
+        except cx_Oracle.Error as e:
+            error_msg = f"Oracle procedure execution failed: {str(e)}"
+            self.logger.error(error_msg)
+            raise QueryExecutionError(error_msg, query=f"CALL {procedure_name}")
+    
+    def _convert_oracle_types(self, row: Tuple) -> List[Any]:
+        """Convert Oracle-specific types to Python types."""
+        converted = []
+        for value in row:
+            if isinstance(value, cx_Oracle.LOB):
+                converted.append(value.read())
+            elif isinstance(value, cx_Oracle.Timestamp):
+                converted.append(value.strftime('%Y-%m-%d %H:%M:%S'))
             else:
-                db_logger.info("Chunked query completed - no data returned")
-                return pd.DataFrame()
-                
-        except Exception as e:
-            db_logger.error(f"Chunked query execution failed: {e}")
-            raise
+                converted.append(value)
+        return converted
     
-    def test_connection(self, environment: str, db_type: str) -> bool:
-        """
-        Test database connection.
+    def validate_connection(self) -> bool:
+        """Validate Oracle connection."""
+        if not self.connection_pool:
+            return False
         
-        Args:
-            environment: Environment name
-            db_type: Database type
-            
-        Returns:
-            True if connection successful, False otherwise
-        """
         try:
-            engine = self.get_sqlalchemy_engine(environment, db_type)
-            
-            # Simple test query
-            test_query = "SELECT 1 as test_column"
-            if db_type.upper() == 'ORACLE':
-                test_query = "SELECT 1 as test_column FROM dual"
-            
-            df = pd.read_sql_query(test_query, engine)
-            
-            if not df.empty:
-                db_logger.info(f"Connection test successful: {environment} {db_type}")
-                return True
-            
-        except Exception as e:
-            db_logger.error(f"Connection test failed for {environment} {db_type}: {e}")
-            
-        return False
+            with self.connection_pool.acquire() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1 FROM DUAL")
+                cursor.close()
+            return True
+        except Exception:
+            return False
     
-    def get_table_info(self, environment: str, db_type: str, table_name: str) -> Dict[str, Any]:
+    def get_table_info(self, table_name: str, schema: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get Oracle table information."""
+        query = """
+        SELECT 
+            column_name,
+            data_type,
+            data_length,
+            nullable,
+            data_default
+        FROM user_tab_columns
+        WHERE table_name = UPPER(:table_name)
+        ORDER BY column_id
         """
-        Get table information (column names, data types, row count).
         
-        Args:
-            environment: Environment name
-            db_type: Database type
-            table_name: Table name
-            
-        Returns:
-            Dictionary with table information
-        """
+        return self.execute_query(query, {'table_name': table_name})
+    
+    def table_exists(self, table_name: str, schema: Optional[str] = None) -> bool:
+        """Check if table exists in Oracle."""
+        query = "SELECT COUNT(*) as cnt FROM user_tables WHERE table_name = UPPER(:table_name)"
+        result = self.execute_query(query, {'table_name': table_name})
+        return result[0]['cnt'] > 0 if result else False
+
+
+class PostgresConnector(BaseConnector):
+    """PostgreSQL database connector implementation."""
+    
+    def __init__(self, config: Dict[str, Any], logger: Optional[logging.Logger] = None):
+        super().__init__(config, logger)
+        self.connection_params = None
+    
+    def connect(self) -> None:
+        """Establish PostgreSQL database connection."""
         try:
-            engine = self.get_sqlalchemy_engine(environment, db_type)
-            
-            # Get column information
-            if db_type.upper() == 'ORACLE':
-                columns_query = f"""
-                SELECT column_name, data_type, nullable
-                FROM user_tab_columns 
-                WHERE table_name = UPPER('{table_name}')
-                ORDER BY column_id
-                """
-                count_query = f"SELECT COUNT(*) as row_count FROM {table_name}"
-            else:  # PostgreSQL
-                columns_query = f"""
-                SELECT column_name, data_type, is_nullable
-                FROM information_schema.columns
-                WHERE table_name = '{table_name.lower()}'
-                ORDER BY ordinal_position
-                """
-                count_query = f"SELECT COUNT(*) as row_count FROM {table_name}"
-            
-            columns_df = pd.read_sql_query(columns_query, engine)
-            count_df = pd.read_sql_query(count_query, engine)
-            
-            table_info = {
-                'table_name': table_name,
-                'columns': columns_df.to_dict('records'),
-                'row_count': count_df.iloc[0]['row_count'] if not count_df.empty else 0,
-                'column_count': len(columns_df)
+            self.connection_params = {
+                'host': self.config['host'],
+                'port': self.config['port'],
+                'database': self.config['database'],
+                'user': self.config['username'],
+                'password': self.config['password'],
+                'cursor_factory': RealDictCursor
             }
             
-            db_logger.info(f"Retrieved table info for {table_name}: {table_info['column_count']} columns, {table_info['row_count']} rows")
-            return table_info
+            # Test connection
+            with psycopg2.connect(**self.connection_params) as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT 1")
             
-        except Exception as e:
-            db_logger.error(f"Failed to get table info for {table_name}: {e}")
-            raise
+            self._connection_time = datetime.now()
+            self.logger.info("PostgreSQL connection parameters configured successfully")
+            
+        except psycopg2.Error as e:
+            error_msg = f"PostgreSQL connection failed: {str(e)}"
+            self.logger.error(error_msg)
+            raise DatabaseConnectionError(error_msg, db_type="POSTGRES",
+                                        environment=self.config.get('environment'))
     
-    def close_connections(self):
-        """Close all database connections."""
-        for conn_name, connection in self.connections.items():
-            try:
-                connection.close()
-                db_logger.info(f"Closed connection: {conn_name}")
-            except Exception as e:
-                db_logger.error(f"Error closing connection {conn_name}: {e}")
+    def disconnect(self) -> None:
+        """PostgreSQL uses connection pooling at application level."""
+        self.logger.info("PostgreSQL connector cleaned up")
+    
+    def execute_query(self, query: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Execute PostgreSQL query and return results."""
+        if not self.connection_params:
+            raise DatabaseConnectionError("PostgreSQL connection not configured")
         
-        self.connections.clear()
+        results = []
+        start_time = time.time()
         
-        # Dispose of SQLAlchemy engines
-        for engine_name, engine in self.engines.items():
-            try:
-                engine.dispose()
-                db_logger.info(f"Disposed engine: {engine_name}")
-            except Exception as e:
-                db_logger.error(f"Error disposing engine {engine_name}: {e}")
+        try:
+            with psycopg2.connect(**self.connection_params) as conn:
+                with conn.cursor() as cursor:
+                    if params:
+                        # Convert dict params to psycopg2 format
+                        cursor.execute(query, params)
+                    else:
+                        cursor.execute(query)
+                    
+                    if cursor.description:
+                        results = cursor.fetchall()
+            
+            execution_time = time.time() - start_time
+            self._log_query_execution(query, execution_time, len(results))
+            return results
+            
+        except psycopg2.Error as e:
+            error_msg = f"PostgreSQL query execution failed: {str(e)}"
+            self.logger.error(error_msg)
+            raise QueryExecutionError(error_msg, query=query, params=params)
+    
+    def execute_many(self, query: str, data: List[Tuple]) -> int:
+        """Execute bulk operations in PostgreSQL."""
+        if not self.connection_params:
+            raise DatabaseConnectionError("PostgreSQL connection not configured")
         
-        self.engines.clear()
+        try:
+            with psycopg2.connect(**self.connection_params) as conn:
+                with conn.cursor() as cursor:
+                    cursor.executemany(query, data)
+                    affected_rows = cursor.rowcount
+            
+            self.logger.info(f"Bulk operation executed successfully, affected {affected_rows} rows")
+            return affected_rows
+            
+        except psycopg2.Error as e:
+            error_msg = f"PostgreSQL bulk operation failed: {str(e)}"
+            self.logger.error(error_msg)
+            raise QueryExecutionError(error_msg, query=query)
+    
+    def execute_procedure(self, procedure_name: str, params: Optional[List[Any]] = None) -> Any:
+        """Execute PostgreSQL stored procedure."""
+        if not self.connection_params:
+            raise DatabaseConnectionError("PostgreSQL connection not configured")
+        
+        try:
+            with psycopg2.connect(**self.connection_params) as conn:
+                with conn.cursor() as cursor:
+                    if params:
+                        cursor.callproc(procedure_name, params)
+                    else:
+                        cursor.callproc(procedure_name)
+                    
+                    result = cursor.fetchone() if cursor.description else None
+            
+            self.logger.info(f"Procedure {procedure_name} executed successfully")
+            return result
+            
+        except psycopg2.Error as e:
+            error_msg = f"PostgreSQL procedure execution failed: {str(e)}"
+            self.logger.error(error_msg)
+            raise QueryExecutionError(error_msg, query=f"CALL {procedure_name}")
+    
+    def validate_connection(self) -> bool:
+        """Validate PostgreSQL connection."""
+        if not self.connection_params:
+            return False
+        
+        try:
+            with psycopg2.connect(**self.connection_params) as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT 1")
+            return True
+        except Exception:
+            return False
+    
+    def get_table_info(self, table_name: str, schema: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get PostgreSQL table information."""
+        query = """
+        SELECT 
+            column_name,
+            data_type,
+            character_maximum_length as data_length,
+            is_nullable as nullable,
+            column_default as data_default
+        FROM information_schema.columns
+        WHERE table_name = %s
+        AND table_schema = %s
+        ORDER BY ordinal_position
+        """
+        
+        schema = schema or 'public'
+        return self.execute_query(query, (table_name, schema))
+    
+    def table_exists(self, table_name: str, schema: Optional[str] = None) -> bool:
+        """Check if table exists in PostgreSQL."""
+        query = """
+        SELECT COUNT(*) as cnt 
+        FROM information_schema.tables 
+        WHERE table_name = %s AND table_schema = %s
+        """
+        schema = schema or 'public'
+        result = self.execute_query(query, (table_name, schema))
+        return result[0]['cnt'] > 0 if result else False
 
-# Global database connector instance
+
+class DatabaseConnectorFactory:
+    """Factory class for creating database connectors."""
+    
+    _connectors = {
+        'ORACLE': OracleConnector,
+        'POSTGRES': PostgresConnector,
+        'POSTGRESQL': PostgresConnector  # Alias
+    }
+    
+    @classmethod
+    def create_connector(cls, db_type: str, config: Dict[str, Any]) -> BaseConnector:
+        """
+        Create a database connector based on type.
+        
+        Args:
+            db_type: Type of database (ORACLE, POSTGRES)
+            config: Database configuration
+            
+        Returns:
+            Database connector instance
+        """
+        db_type_upper = db_type.upper()
+        
+        if db_type_upper not in cls._connectors:
+            raise ValueError(f"Unsupported database type: {db_type}")
+        
+        connector_class = cls._connectors[db_type_upper]
+        return connector_class(config)
+    
+    @classmethod
+    def register_connector(cls, db_type: str, connector_class: type) -> None:
+        """Register a new database connector type."""
+        cls._connectors[db_type.upper()] = connector_class
+
+
+class DatabaseManager:
+    """Centralized database connection manager."""
+    
+    def __init__(self):
+        self._connections: Dict[str, BaseConnector] = {}
+        self.logger = logger
+    
+    def get_connection(self, env: str, db_type: str, config: Dict[str, Any]) -> BaseConnector:
+        """Get or create a database connection."""
+        connection_key = f"{env}_{db_type}"
+        
+        if connection_key not in self._connections:
+            self.logger.info(f"Creating new connection for {connection_key}")
+            config['environment'] = env  # Add environment to config
+            connector = DatabaseConnectorFactory.create_connector(db_type, config)
+            connector.connect()
+            self._connections[connection_key] = connector
+        
+        return self._connections[connection_key]
+    
+    def close_connection(self, env: str, db_type: str) -> None:
+        """Close a specific database connection."""
+        connection_key = f"{env}_{db_type}"
+        
+        if connection_key in self._connections:
+            self._connections[connection_key].disconnect()
+            del self._connections[connection_key]
+            self.logger.info(f"Closed connection: {connection_key}")
+    
+    def close_all_connections(self) -> None:
+        """Close all database connections."""
+        for connection_key, connector in self._connections.items():
+            try:
+                connector.disconnect()
+                self.logger.info(f"Closed connection: {connection_key}")
+            except Exception as e:
+                self.logger.warning(f"Error closing {connection_key}: {str(e)}")
+        
+        self._connections.clear()
+    
+    def validate_all_connections(self) -> Dict[str, bool]:
+        """Validate all active connections."""
+        results = {}
+        
+        for connection_key, connector in self._connections.items():
+            results[connection_key] = connector.validate_connection()
+        
+        return results
+    
+    def get_connection_stats(self) -> Dict[str, Any]:
+        """Get statistics for all connections."""
+        stats = {}
+        
+        for connection_key, connector in self._connections.items():
+            stats[connection_key] = connector.get_connection_info()
+        
+        return stats
+
+
+# Singleton instance
+db_manager = DatabaseManager()
+
+
+# Legacy connector wrapper for backward compatibility
+class DatabaseConnector:
+    """Legacy connector wrapper for backward compatibility."""
+    
+    def __init__(self):
+        self.manager = db_manager
+    
+    def connect(self, db_type: str, **kwargs) -> BaseConnector:
+        """Legacy connect method."""
+        # Map legacy parameters to new config format
+        config = {
+            'host': kwargs.get('host'),
+            'port': kwargs.get('port'),
+            'database': kwargs.get('database', kwargs.get('service_name')),
+            'username': kwargs.get('username'),
+            'password': kwargs.get('password')
+        }
+        return self.manager.get_connection('DEFAULT', db_type, config)
+    
+    def execute_query(self, connection: Any, query: str, params: Optional[Dict] = None) -> List[Dict]:
+        """Legacy execute query method."""
+        if isinstance(connection, BaseConnector):
+            return connection.execute_query(query, params)
+        else:
+            # Handle legacy connection objects
+            raise NotImplementedError("Legacy connection objects not supported")
+    
+    def disconnect(self, connection: Any) -> None:
+        """Legacy disconnect method."""
+        if isinstance(connection, BaseConnector):
+            # Don't actually disconnect - let the manager handle it
+            pass
+        else:
+            # Handle legacy connection objects
+            if hasattr(connection, 'close'):
+                connection.close()
+
+
+# Maintain singleton for backward compatibility
 db_connector = DatabaseConnector()
