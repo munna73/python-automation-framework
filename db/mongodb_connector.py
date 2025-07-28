@@ -33,13 +33,13 @@ class MongoDBConnector:
             config = config_loader.get_database_config(environment, 'MONGODB')
             
             # Build connection string
-            if config.get('username') and config.get('password'):
+            if config.username and config.password:
                 connection_string = (
-                    f"mongodb://{config['username']}:{config['password']}@"
-                    f"{config['host']}:{config['port']}/{config['database']}"
+                    f"mongodb://{config.username}:{config.password}@"
+                    f"{config.host}:{config.port}/{config.database}"
                 )
             else:
-                connection_string = f"mongodb://{config['host']}:{config['port']}/{config['database']}"
+                connection_string = f"mongodb://{config.host}:{config.port}/{config.database}"
             
             # Add additional connection options
             client = MongoClient(
@@ -82,7 +82,7 @@ class MongoDBConnector:
             
             if not database_name:
                 config = config_loader.get_database_config(environment, 'MONGODB')
-                database_name = config['database']
+                database_name = config.database
             
             db = client[database_name]
             
@@ -515,6 +515,77 @@ class MongoDBConnector:
                 db_logger.error(f"Error closing MongoDB connection {client_name}: {e}")
         
         self.clients.clear()
+    
+    # ✅ CORRECTED: These are now properly indented as class methods
+    def get_connection(self, environment: str):
+        """Get MongoDB client connection (for step compatibility)."""
+        client_key = f"{environment}_MONGODB"
+        
+        if client_key not in self.clients:
+            self.connect_mongodb(environment)
+        
+        return self.clients[client_key]
+
+    def get_database_name(self, environment: str) -> str:
+        """Get database name for environment (for step compatibility)."""
+        config = config_loader.get_database_config(environment, 'MONGODB')
+        return config.database
+
+    def count_documents(self, environment: str, collection_name: str, 
+                       query: Dict[str, Any] = None, database_name: str = None) -> int:
+        """Count documents in collection (for step compatibility)."""
+        try:
+            db = self.get_database(environment, database_name)
+            collection = db[collection_name]
+            
+            if query:
+                count = collection.count_documents(query)
+            else:
+                count = collection.estimated_document_count()
+            
+            db_logger.info(f"Document count for {collection_name}: {count}")
+            return count
+            
+        except Exception as e:
+            db_logger.error(f"Document count failed for {collection_name}: {e}")
+            raise
+
+    def find_documents(self, environment: str, collection_name: str,
+                      query: Dict[str, Any] = None, projection: Dict[str, Any] = None,
+                      database_name: str = None) -> List[Dict[str, Any]]:
+        """Find documents and return as list of dictionaries (for step compatibility)."""
+        try:
+            db = self.get_database(environment, database_name)
+            collection = db[collection_name]
+            
+            cursor = collection.find(query or {}, projection)
+            documents = list(cursor)
+            
+            # Convert ObjectId to string for compatibility
+            for doc in documents:
+                if '_id' in doc and isinstance(doc['_id'], ObjectId):
+                    doc['_id'] = str(doc['_id'])
+            
+            db_logger.info(f"Found {len(documents)} documents in {collection_name}")
+            return documents
+            
+        except Exception as e:
+            db_logger.error(f"Find documents failed for {collection_name}: {e}")
+            raise
+
+    def list_collection_names(self, environment: str, database_name: str = None) -> List[str]:
+        """List all collection names (for step compatibility)."""
+        try:
+            db = self.get_database(environment, database_name)
+            collections = db.list_collection_names()
+            
+            db_logger.info(f"Found {len(collections)} collections in database")
+            return collections
+            
+        except Exception as e:
+            db_logger.error(f"List collections failed: {e}")
+            raise
+    
 
 # Global MongoDB connector instance
 mongodb_connector = MongoDBConnector()

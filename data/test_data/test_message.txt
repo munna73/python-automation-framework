@@ -1,3 +1,0 @@
-This is a test message for MQ posting.
-It contains multiple lines to test the framework.
-Each line will be posted as a separate message.

@@ -386,3 +386,64 @@ class SchemaValidator:
         # (Implementation details omitted for brevity)
         
         return comparison_result
+    
+    # Add this method to your DataValidator class for better business rule validation
+
+def validate_business_rules(self, data: List[Dict], validation_rules: Dict[str, str]) -> Dict:
+    """Validate business rules on data (for step compatibility)."""
+    validation_results = {}
+    
+    for field_name, rule in validation_rules.items():
+        if rule == 'NOT_NULL':
+            null_count = sum(1 for row in data if row.get(field_name) is None)
+            validation_results[field_name] = {
+                'rule': rule,
+                'passed': null_count == 0,
+                'details': f"Found {null_count} NULL values",
+                'failed_count': null_count,
+                'total_count': len(data)
+            }
+            
+        elif rule == 'POSITIVE_NUMBER':
+            invalid_count = 0
+            for row in data:
+                value = row.get(field_name)
+                if value is not None:
+                    try:
+                        if float(value) <= 0:
+                            invalid_count += 1
+                    except (ValueError, TypeError):
+                        invalid_count += 1
+            
+            validation_results[field_name] = {
+                'rule': rule,
+                'passed': invalid_count == 0,
+                'details': f"Found {invalid_count} non-positive values",
+                'failed_count': invalid_count,
+                'total_count': len(data)
+            }
+            
+        elif rule == 'VALID_DATE':
+            invalid_count = 0
+            for row in data:
+                value = row.get(field_name)
+                if value is not None:
+                    try:
+                        pd.to_datetime(value)
+                    except:
+                        invalid_count += 1
+            
+            validation_results[field_name] = {
+                'rule': rule,
+                'passed': invalid_count == 0,
+                'details': f"Found {invalid_count} invalid date values",
+                'failed_count': invalid_count,
+                'total_count': len(data)
+            }
+    
+    return validation_results
+
+
+data_validator = DataValidator()
+performance_monitor = PerformanceMonitor()
+schema_validator = SchemaValidator()

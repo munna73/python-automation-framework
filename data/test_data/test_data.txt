@@ -1,5 +1,0 @@
-ine 1: Customer data sync message
-Line 2: Order processing notification  
-Line 3: Inventory update alert
-Line 4: Payment confirmation message
-Line 5: Shipping notification

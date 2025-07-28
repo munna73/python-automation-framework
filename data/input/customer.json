@@ -1,0 +1,144 @@
+// data/input/customer.json
+{
+  "name": "John Doe",
+  "email": "john.doe@example.com",
+  "phone": "+1234567890",
+  "address": {
+    "street": "123 Main St",
+    "city": "New York",
+    "state": "NY",
+    "zip": "10001",
+    "country": "USA"
+  },
+  "preferences": {
+    "newsletter": true,
+    "notifications": {
+      "email": true,
+      "sms": false
+    }
+  },
+  "tags": ["vip", "early-adopter"]
+}
+
+// data/input/large_import.json
+{
+  "import_type": "customers",
+  "data": [
+    {
+      "name": "Customer 1",
+      "email": "customer1@example.com",
+      "status": "active"
+    },
+    {
+      "name": "Customer 2",
+      "email": "customer2@example.com",
+      "status": "active"
+    },
+    {
+      "name": "Customer 3",
+      "email": "customer3@example.com",
+      "status": "inactive"
+    }
+  ],
+  "options": {
+    "update_existing": true,
+    "validate_email": true,
+    "send_welcome_email": false
+  }
+}
+
+// schemas/post_customers.json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["name", "email"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "email": {
+      "type": "string",
+      "format": "email"
+    },
+    "phone": {
+      "type": "string",
+      "pattern": "^\\+?[1-9]\\d{1,14}$"
+    },
+    "address": {
+      "type": "object",
+      "properties": {
+        "street": {"type": "string"},
+        "city": {"type": "string"},
+        "state": {"type": "string"},
+        "zip": {"type": "string"},
+        "country": {"type": "string"}
+      }
+    },
+    "preferences": {
+      "type": "object",
+      "properties": {
+        "newsletter": {"type": "boolean"},
+        "notifications": {
+          "type": "object",
+          "properties": {
+            "email": {"type": "boolean"},
+            "sms": {"type": "boolean"}
+          }
+        }
+      }
+    },
+    "tags": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  }
+}
+
+// schemas/get_customers_123.json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["id", "name", "email", "created_at", "updated_at"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9-]+$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "email": {
+      "type": "string",
+      "format": "email"
+    },
+    "phone": {
+      "type": ["string", "null"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["active", "inactive", "pending"]
+    },
+    "address": {
+      "type": ["object", "null"],
+      "properties": {
+        "street": {"type": "string"},
+        "city": {"type": "string"},
+        "state": {"type": "string"},
+        "zip": {"type": "string"},
+        "country": {"type": "string"}
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

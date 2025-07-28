@@ -1,367 +1,613 @@
 """
-AWS SQS connector for sending and receiving messages from SQS queues.
+AWS-related step definitions for Behave BDD testing.
 """
-import boto3
-import json
-import uuid
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, Any, List, Optional, Union
-from botocore.exceptions import ClientError, NoCredentialsError
-from utils.config_loader import config_loader
+from behave import given, when, then
+from aws.sqs_connector import sqs_connector
+from aws.s3_connector import s3_connector
+from aws.sql_integration import aws_sql_integration
 from utils.logger import logger
+import json
+import time
+import uuid
+from typing import Optional
 
-class SQSConnector:
-    """AWS SQS connector for message operations."""
-    
-    def __init__(self):
-        """Initialize SQS connector."""
-        self.sqs_client = None
-        self.sqs_resource = None
-        self.aws_config = None
-        self.setup_aws_connection()
-    
-    def setup_aws_connection(self):
-        """Setup AWS SQS connection using environment variables."""
-        try:
-            self.aws_config = config_loader.get_aws_config()
-            
-            # Create SQS client and resource
-            self.sqs_client = boto3.client(
-                'sqs',
-                region_name=self.aws_config.get('region', 'us-east-1'),
-                aws_access_key_id=self.aws_config.get('access_key_id'),
-                aws_secret_access_key=self.aws_config.get('secret_access_key')
-            )
-            
-            self.sqs_resource = boto3.resource(
-                'sqs',
-                region_name=self.aws_config.get('region', 'us-east-1'),
-                aws_access_key_id=self.aws_config.get('access_key_id'),
-                aws_secret_access_key=self.aws_config.get('secret_access_key')
-            )
-            
-            logger.info("AWS SQS connection established successfully")
-            
-        except NoCredentialsError:
-            logger.error("AWS credentials not found. Please set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables")
-            raise
-        except Exception as e:
-            logger.error(f"Failed to setup AWS SQS connection: {e}")
-            raise
-    
-    def send_message(self, 
-                    queue_url: str, 
-                    message_body: str,
-                    message_attributes: Dict[str, Any] = None,
-                    delay_seconds: int = 0) -> Dict[str, Any]:
-        """
-        Send a message to SQS queue.
-        
-        Args:
-            queue_url: SQS queue URL
-            message_body: Message content
-            message_attributes: Optional message attributes
-            delay_seconds: Delay before message becomes available
-            
-        Returns:
-            Send message response
-        """
-        try:
-            # Check if it's a FIFO queue
-            is_fifo = queue_url.endswith('.fifo')
-            
-            send_params = {
-                'QueueUrl': queue_url,
-                'MessageBody': message_body
-            }
-            
-            # Add message attributes if provided
-            if message_attributes:
-                send_params['MessageAttributes'] = self._format_message_attributes(message_attributes)
-            
-            # Add delay if specified
-            if delay_seconds > 0:
-                send_params['DelaySeconds'] = delay_seconds
-            
-            # FIFO queue specific parameters
-            if is_fifo:
-                # Generate unique message group ID
-                message_group_id = self._generate_group_id()
-                send_params['MessageGroupId'] = message_group_id
-                
-                # Generate deduplication ID to prevent duplicates
-                deduplication_id = self._generate_deduplication_id(message_body)
-                send_params['MessageDeduplicationId'] = deduplication_id
-                
-                logger.debug(f"FIFO queue - Group ID: {message_group_id}, Dedup ID: {deduplication_id}")
-            
-            response = self.sqs_client.send_message(**send_params)
-            
-            logger.info(f"Message sent to SQS queue - MessageId: {response.get('MessageId')}")
-            return response
-            
-        except ClientError as e:
-            logger.error(f"Failed to send message to SQS: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error sending message to SQS: {e}")
-            raise
-    
-    def send_file_as_messages(self, 
-                             queue_url: str, 
-                             file_path: str,
-                             line_by_line: bool = True) -> Dict[str, Any]:
-        """
-        Send file content to SQS queue.
-        
-        Args:
-            queue_url: SQS queue URL
-            file_path: Path to file to send
-            line_by_line: If True, send each line as separate message; if False, send entire file as one message
-            
-        Returns:
-            Summary of send operations
-        """
-        try:
-            file_path_obj = Path(file_path)
-            
-            if not file_path_obj.exists():
-                # Try looking in data directory
-                file_path_obj = Path(__file__).parent.parent / "data" / "input" / file_path
-            
-            if not file_path_obj.exists():
-                raise FileNotFoundError(f"File not found: {file_path}")
-            
-            logger.info(f"Sending file to SQS: {file_path_obj.name} (line_by_line: {line_by_line})")
-            
-            success_count = 0
-            error_count = 0
-            errors = []
-            
-            with open(file_path_obj, 'r', encoding='utf-8') as f:
-                if line_by_line:
-                    # Send each line as a separate message
-                    for line_number, line in enumerate(f, 1):
-                        line = line.rstrip('\n\r')
-                        if line:  # Skip empty lines
-                            try:
-                                message_attributes = {
-                                    'source_file': {'StringValue': file_path_obj.name, 'DataType': 'String'},
-                                    'line_number': {'StringValue': str(line_number), 'DataType': 'Number'}
-                                }
-                                
-                                self.send_message(queue_url, line, message_attributes)
-                                success_count += 1
-                                
-                            except Exception as e:
-                                error_count += 1
-                                errors.append(f"Line {line_number}: {str(e)}")
-                else:
-                    # Send entire file as one message
-                    file_content = f.read()
-                    try:
-                        message_attributes = {
-                            'source_file': {'StringValue': file_path_obj.name, 'DataType': 'String'},
-                            'file_size': {'StringValue': str(len(file_content)), 'DataType': 'Number'}
-                        }
-                        
-                        self.send_message(queue_url, file_content, message_attributes)
-                        success_count = 1
-                        
-                    except Exception as e:
-                        error_count = 1
-                        errors.append(f"File send error: {str(e)}")
-            
-            results = {
-                'file_path': str(file_path_obj),
-                'mode': 'line_by_line' if line_by_line else 'entire_file',
-                'success_count': success_count,
-                'error_count': error_count,
-                'total_attempts': success_count + error_count,
-                'success_rate': (success_count / (success_count + error_count) * 100) if (success_count + error_count) > 0 else 0,
-                'errors': errors
-            }
-            
-            logger.info(f"File send completed: {success_count} successful, {error_count} errors")
-            return results
-            
-        except Exception as e:
-            logger.error(f"Error sending file to SQS: {e}")
-            raise
-    
-    def receive_messages(self, 
-                        queue_url: str,
-                        max_messages: int = 10,
-                        wait_time_seconds: int = 20,
-                        visibility_timeout: int = 30) -> List[Dict[str, Any]]:
-        """
-        Receive messages from SQS queue.
-        
-        Args:
-            queue_url: SQS queue URL
-            max_messages: Maximum number of messages to receive (1-10)
-            wait_time_seconds: Long polling wait time
-            visibility_timeout: How long messages are hidden from other consumers
-            
-        Returns:
-            List of received messages
-        """
-        try:
-            response = self.sqs_client.receive_message(
-                QueueUrl=queue_url,
-                MaxNumberOfMessages=min(max_messages, 10),  # AWS limit is 10
-                WaitTimeSeconds=wait_time_seconds,
-                VisibilityTimeoutSeconds=visibility_timeout,
-                MessageAttributeNames=['All']
-            )
-            
-            messages = response.get('Messages', [])
-            logger.info(f"Received {len(messages)} messages from SQS queue")
-            
-            return messages
-            
-        except ClientError as e:
-            logger.error(f"Failed to receive messages from SQS: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error receiving messages from SQS: {e}")
-            raise
-    
-    def delete_message(self, queue_url: str, receipt_handle: str) -> bool:
-        """
-        Delete a message from SQS queue.
-        
-        Args:
-            queue_url: SQS queue URL
-            receipt_handle: Receipt handle of the message to delete
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            self.sqs_client.delete_message(
-                QueueUrl=queue_url,
-                ReceiptHandle=receipt_handle
-            )
-            
-            logger.debug("Message deleted from SQS queue")
-            return True
-            
-        except ClientError as e:
-            logger.error(f"Failed to delete message from SQS: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Unexpected error deleting message from SQS: {e}")
-            return False
-    
-    def get_queue_attributes(self, queue_url: str) -> Dict[str, Any]:
-        """
-        Get queue attributes and statistics.
-        
-        Args:
-            queue_url: SQS queue URL
-            
-        Returns:
-            Queue attributes
-        """
-        try:
-            response = self.sqs_client.get_queue_attributes(
-                QueueUrl=queue_url,
-                AttributeNames=['All']
-            )
-            
-            attributes = response.get('Attributes', {})
-            
-            queue_info = {
-                'queue_url': queue_url,
-                'message_count': int(attributes.get('ApproximateNumberOfMessages', 0)),
-                'in_flight_count': int(attributes.get('ApproximateNumberOfMessagesNotVisible', 0)),
-                'delayed_count': int(attributes.get('ApproximateNumberOfMessagesDelayed', 0)),
-                'created_timestamp': attributes.get('CreatedTimestamp'),
-                'visibility_timeout': int(attributes.get('VisibilityTimeout', 30)),
-                'max_receive_count': attributes.get('MaxReceiveCount'),
-                'is_fifo': queue_url.endswith('.fifo')
-            }
-            
-            logger.info(f"Queue stats - Messages: {queue_info['message_count']}, In-flight: {queue_info['in_flight_count']}")
-            return queue_info
-            
-        except ClientError as e:
-            logger.error(f"Failed to get queue attributes: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error getting queue attributes: {e}")
-            raise
-    
-    def test_connection(self, queue_url: str = None) -> bool:
-        """
-        Test SQS connection.
-        
-        Args:
-            queue_url: Optional queue URL to test specific queue access
-            
-        Returns:
-            True if connection successful, False otherwise
-        """
-        try:
-            if queue_url:
-                # Test specific queue access
-                self.get_queue_attributes(queue_url)
-                logger.info(f"SQS connection test successful for queue: {queue_url}")
-            else:
-                # Test general SQS access by listing queues
-                response = self.sqs_client.list_queues()
-                queue_count = len(response.get('QueueUrls', []))
-                logger.info(f"SQS connection test successful - {queue_count} queues accessible")
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"SQS connection test failed: {e}")
-            return False
-    
-    def _format_message_attributes(self, attributes: Dict[str, Any]) -> Dict[str, Any]:
-        """Format message attributes for SQS."""
-        formatted_attributes = {}
-        
-        for key, value in attributes.items():
-            if isinstance(value, dict) and 'StringValue' in value and 'DataType' in value:
-                # Already formatted
-                formatted_attributes[key] = value
-            elif isinstance(value, str):
-                formatted_attributes[key] = {
-                    'StringValue': value,
-                    'DataType': 'String'
-                }
-            elif isinstance(value, (int, float)):
-                formatted_attributes[key] = {
-                    'StringValue': str(value),
-                    'DataType': 'Number'
-                }
-            else:
-                formatted_attributes[key] = {
-                    'StringValue': str(value),
-                    'DataType': 'String'
-                }
-        
-        return formatted_attributes
-    
-    def _generate_group_id(self) -> str:
-        """Generate unique message group ID for FIFO queues."""
-        # Use timestamp + random component for uniqueness
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        unique_id = str(uuid.uuid4())[:8]
-        return f"group_{timestamp}_{unique_id}"
-    
-    def _generate_deduplication_id(self, message_body: str) -> str:
-        """Generate deduplication ID for FIFO queues."""
-        import hashlib
-        
-        # Create hash of message content + timestamp for uniqueness
-        content_hash = hashlib.md5(message_body.encode()).hexdigest()[:16]
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-        return f"{content_hash}_{timestamp}"
+# SQS Step Definitions
+@given('AWS SQS connection is configured')
+def step_sqs_connection_configured(context):
+    """Verify AWS SQS connection is configured."""
+    logger.info("Verifying AWS SQS connection configuration")
+    context.sqs_connector = sqs_connector
+    assert context.sqs_connector.sqs_client is not None, "SQS client not configured"
 
-# Global SQS connector instance
-sqs_connector = SQSConnector()
+@given('AWS credentials are loaded from profile "{profile_name}"')
+def step_load_aws_profile(context, profile_name):
+    """Load AWS credentials from specific profile."""
+    logger.info(f"Loading AWS credentials from profile: {profile_name}")
+    context.aws_profile = profile_name
+    # Reinitialize connectors with profile
+    context.sqs_connector = sqs_connector(profile_name=profile_name)
+    context.s3_connector = s3_connector(profile_name=profile_name)
+
+@given('SQS queue URL is set to "{queue_url}"')
+def step_set_sqs_queue_url(context, queue_url):
+    """Set SQS queue URL for testing."""
+    # Validate queue URL format
+    if not queue_url.startswith("https://sqs."):
+        raise ValueError(f"Invalid SQS queue URL format: {queue_url}")
+    
+    logger.info(f"Setting SQS queue URL: {queue_url}")
+    context.sqs_queue_url = queue_url
+    
+    # Set FIFO flag for later use
+    context.is_fifo_queue = queue_url.endswith('.fifo')
+
+@given('message group ID is set to "{group_id}"')
+def step_set_message_group_id(context, group_id):
+    """Set message group ID for FIFO queues."""
+    logger.info(f"Setting message group ID: {group_id}")
+    context.message_group_id = group_id
+
+@when('I send message "{message_text}" to SQS queue')
+def step_send_message_to_sqs(context, message_text):
+    """Send a message to SQS queue."""
+    logger.info(f"Sending message to SQS: {message_text}")
+    
+    try:
+        # Check if FIFO queue
+        if getattr(context, 'is_fifo_queue', False):
+            # FIFO queues require message group ID and deduplication ID
+            context.sqs_send_result = context.sqs_connector.send_message(
+                context.sqs_queue_url, 
+                message_text,
+                message_group_id=getattr(context, 'message_group_id', 'default-group'),
+                message_deduplication_id=str(uuid.uuid4())
+            )
+        else:
+            context.sqs_send_result = context.sqs_connector.send_message(
+                context.sqs_queue_url, message_text
+            )
+    except Exception as e:
+        logger.error(f"Failed to send SQS message: {str(e)}")
+        raise AssertionError(f"SQS send failed: {str(e)}")
+
+@when('I send message with attributes to SQS queue')
+def step_send_message_with_attributes(context):
+    """Send message with custom attributes from table."""
+    message_text = context.text or "Test message with attributes"
+    attributes = {}
+    
+    if context.table:
+        for row in context.table:
+            attributes[row['attribute']] = {
+                'StringValue': row['value'],
+                'DataType': row.get('type', 'String')
+            }
+    
+    logger.info(f"Sending message with attributes: {attributes}")
+    try:
+        context.sqs_send_result = context.sqs_connector.send_message_with_attributes(
+            context.sqs_queue_url, message_text, attributes
+        )
+    except Exception as e:
+        logger.error(f"Failed to send message with attributes: {str(e)}")
+        raise AssertionError(f"SQS send with attributes failed: {str(e)}")
+
+@when('I send {count:d} messages to SQS queue in batch')
+def step_send_batch_messages(context, count):
+    """Send multiple messages in batch."""
+    logger.info(f"Sending {count} messages in batch to SQS")
+    
+    messages = []
+    for i in range(count):
+        message = {
+            'Id': str(i),
+            'MessageBody': f'Batch message {i}'
+        }
+        if getattr(context, 'is_fifo_queue', False):
+            message['MessageGroupId'] = getattr(context, 'message_group_id', 'default-group')
+            message['MessageDeduplicationId'] = f"{uuid.uuid4()}-{i}"
+        messages.append(message)
+    
+    try:
+        context.sqs_batch_result = context.sqs_connector.send_message_batch(
+            context.sqs_queue_url, messages
+        )
+    except Exception as e:
+        logger.error(f"Failed to send batch messages: {str(e)}")
+        raise AssertionError(f"SQS batch send failed: {str(e)}")
+
+@when('I send message "{message_text}" to SQS queue with {retries:d} retries')
+def step_send_message_with_retries(context, message_text, retries):
+    """Send message with retry logic."""
+    logger.info(f"Sending message with up to {retries} retries")
+    
+    for attempt in range(retries + 1):
+        try:
+            context.sqs_send_result = context.sqs_connector.send_message(
+                context.sqs_queue_url, message_text
+            )
+            logger.info(f"Message sent successfully on attempt {attempt + 1}")
+            break
+        except Exception as e:
+            if attempt < retries:
+                wait_time = 2 ** attempt  # Exponential backoff
+                logger.warning(f"Attempt {attempt + 1} failed, retrying in {wait_time}s: {str(e)}")
+                time.sleep(wait_time)
+            else:
+                logger.error(f"All retry attempts failed: {str(e)}")
+                raise AssertionError(f"SQS send failed after {retries} retries: {str(e)}")
+
+@when('I send file "{filename}" to SQS queue line by line')
+def step_send_file_line_by_line_sqs(context, filename):
+    """Send file to SQS queue line by line."""
+    logger.info(f"Sending file to SQS line by line: {filename}")
+    
+    try:
+        start_time = time.time()
+        context.sqs_file_result = context.sqs_connector.send_file_as_messages(
+            context.sqs_queue_url, filename, line_by_line=True
+        )
+        context.file_send_duration = time.time() - start_time
+        logger.info(f"File sent in {context.file_send_duration:.2f} seconds")
+    except Exception as e:
+        logger.error(f"Failed to send file to SQS: {str(e)}")
+        raise AssertionError(f"SQS file send failed: {str(e)}")
+
+@when('I send file "{filename}" to SQS queue as single message')
+def step_send_file_as_single_message_sqs(context, filename):
+    """Send entire file as single SQS message."""
+    logger.info(f"Sending file to SQS as single message: {filename}")
+    
+    try:
+        context.sqs_file_result = context.sqs_connector.send_file_as_messages(
+            context.sqs_queue_url, filename, line_by_line=False
+        )
+    except Exception as e:
+        logger.error(f"Failed to send file as single message: {str(e)}")
+        raise AssertionError(f"SQS file send failed: {str(e)}")
+
+@when('I receive messages from SQS queue')
+def step_receive_messages_from_sqs(context):
+    """Receive messages from SQS queue."""
+    logger.info("Receiving messages from SQS queue")
+    
+    # Better default handling
+    max_messages = getattr(context, 'sqs_max_messages', 
+                          context.config.userdata.get('default_max_messages', 10))
+    
+    try:
+        context.sqs_received_messages = context.sqs_connector.receive_messages(
+            context.sqs_queue_url, max_messages
+        )
+        logger.info(f"Received {len(context.sqs_received_messages)} messages")
+    except Exception as e:
+        logger.error(f"Failed to receive messages: {str(e)}")
+        raise AssertionError(f"SQS receive failed: {str(e)}")
+
+@when('I receive {max_messages:d} messages from SQS queue')
+def step_receive_n_messages_from_sqs(context, max_messages):
+    """Receive specific number of messages from SQS queue."""
+    logger.info(f"Receiving {max_messages} messages from SQS queue")
+    
+    try:
+        start_time = time.time()
+        context.sqs_received_messages = context.sqs_connector.receive_messages(
+            context.sqs_queue_url, max_messages
+        )
+        context.receive_duration = time.time() - start_time
+        
+        logger.info(f"Received {len(context.sqs_received_messages)} messages in {context.receive_duration:.2f} seconds")
+    except Exception as e:
+        logger.error(f"Failed to receive {max_messages} messages: {str(e)}")
+        raise AssertionError(f"SQS receive failed: {str(e)}")
+
+@when('I delete processed messages from SQS')
+def step_delete_processed_messages(context):
+    """Delete processed messages from SQS."""
+    logger.info("Deleting processed messages from SQS")
+    
+    if not hasattr(context, 'sqs_received_messages'):
+        logger.warning("No messages to delete")
+        return
+    
+    deleted_count = 0
+    for message in context.sqs_received_messages:
+        try:
+            context.sqs_connector.delete_message(
+                context.sqs_queue_url,
+                message['ReceiptHandle']
+            )
+            deleted_count += 1
+        except Exception as e:
+            logger.error(f"Failed to delete message: {str(e)}")
+    
+    logger.info(f"Deleted {deleted_count} messages")
+    context.deleted_message_count = deleted_count
+
+@then('SQS message should be sent successfully')
+def step_verify_sqs_message_sent(context):
+    """Verify SQS message was sent successfully."""
+    logger.info("Verifying SQS message sent successfully")
+    
+    assert hasattr(context, 'sqs_send_result'), "No SQS send result available"
+    assert 'MessageId' in context.sqs_send_result, "Message ID not found in send result"
+    
+    # Add more validations
+    assert 'ResponseMetadata' in context.sqs_send_result, "No response metadata"
+    assert context.sqs_send_result['ResponseMetadata']['HTTPStatusCode'] == 200, "Invalid HTTP status"
+    
+    logger.info(f"Message sent successfully with ID: {context.sqs_send_result['MessageId']}")
+
+@then('SQS batch should send {expected_success:d} messages successfully')
+def step_verify_sqs_batch_sent(context, expected_success):
+    """Verify SQS batch send results."""
+    logger.info(f"Verifying SQS batch sent {expected_success} messages")
+    
+    assert hasattr(context, 'sqs_batch_result'), "No SQS batch result available"
+    
+    successful = len(context.sqs_batch_result.get('Successful', []))
+    failed = len(context.sqs_batch_result.get('Failed', []))
+    
+    assert successful == expected_success, f"Expected {expected_success} successful, got {successful}"
+    
+    if failed > 0:
+        logger.warning(f"{failed} messages failed to send")
+
+@then('SQS file should be sent with {expected_success:d} successful messages')
+def step_verify_sqs_file_sent(context, expected_success):
+    """Verify SQS file was sent with expected success count."""
+    logger.info(f"Verifying SQS file sent with {expected_success} successful messages")
+    
+    assert hasattr(context, 'sqs_file_result'), "No SQS file result available"
+    actual_success = context.sqs_file_result.get('success_count', 0)
+    
+    assert actual_success == expected_success, f"Expected {expected_success} successful messages, got {actual_success}"
+    
+    # Log performance if available
+    if hasattr(context, 'file_send_duration'):
+        rate = actual_success / context.file_send_duration
+        logger.info(f"Send rate: {rate:.2f} messages/second")
+
+@then('SQS should receive {expected_count:d} messages')
+def step_verify_sqs_received_count(context, expected_count):
+    """Verify expected number of messages received from SQS."""
+    logger.info(f"Verifying SQS received {expected_count} messages")
+    
+    assert hasattr(context, 'sqs_received_messages'), "No SQS received messages available"
+    actual_count = len(context.sqs_received_messages)
+    
+    assert actual_count == expected_count, f"Expected {expected_count} messages, got {actual_count}"
+    
+    # Log performance metrics if available
+    if hasattr(context, 'receive_duration') and actual_count > 0:
+        rate = actual_count / context.receive_duration
+        logger.info(f"Receive rate: {rate:.2f} messages/second")
+
+@then('processing should complete within {expected_time:d} seconds')
+def step_verify_processing_time(context, expected_time):
+    """Verify processing completed within expected time."""
+    duration = getattr(context, 'receive_duration', 0) or getattr(context, 'file_send_duration', 0)
+    
+    assert duration <= expected_time, f"Processing took {duration:.2f}s, expected under {expected_time}s"
+
+# S3 Step Definitions
+@given('AWS S3 connection is configured')
+def step_s3_connection_configured(context):
+    """Verify AWS S3 connection is configured."""
+    logger.info("Verifying AWS S3 connection configuration")
+    context.s3_connector = s3_connector
+    assert context.s3_connector.s3_client is not None, "S3 client not configured"
+
+@given('S3 bucket is set to "{bucket_name}"')
+def step_set_s3_bucket(context, bucket_name):
+    """Set S3 bucket name for testing."""
+    logger.info(f"Setting S3 bucket: {bucket_name}")
+    context.s3_bucket = bucket_name
+
+@given('S3 prefix is set to "{prefix}"')
+def step_set_s3_prefix(context, prefix):
+    """Set S3 prefix for testing."""
+    logger.info(f"Setting S3 prefix: {prefix}")
+    context.s3_prefix = prefix
+
+@given('local download directory is set to "{directory}"')
+def step_set_local_directory(context, directory):
+    """Set local download directory."""
+    logger.info(f"Setting local download directory: {directory}")
+    context.local_directory = directory
+    
+    # Ensure directory exists
+    import os
+    os.makedirs(directory, exist_ok=True)
+
+@when('I download file "{s3_key}" from S3 to "{local_path}"')
+def step_download_s3_file(context, s3_key, local_path):
+    """Download single file from S3."""
+    logger.info(f"Downloading S3 file: {s3_key} -> {local_path}")
+    
+    try:
+        start_time = time.time()
+        context.s3_download_result = context.s3_connector.download_file(
+            context.s3_bucket, s3_key, local_path
+        )
+        context.download_duration = time.time() - start_time
+        logger.info(f"Download completed in {context.download_duration:.2f} seconds")
+    except Exception as e:
+        logger.error(f"Failed to download S3 file: {str(e)}")
+        raise AssertionError(f"S3 download failed: {str(e)}")
+
+@when('I download S3 directory to local directory')
+def step_download_s3_directory(context):
+    """Download S3 directory to local directory."""
+    logger.info("Downloading S3 directory to local directory")
+    
+    try:
+        start_time = time.time()
+        context.s3_download_results = context.s3_connector.download_directory(
+            context.s3_bucket, 
+            context.s3_prefix, 
+            context.local_directory
+        )
+        context.download_duration = time.time() - start_time
+        
+        file_count = context.s3_download_results.get('downloaded_count', 0)
+        logger.info(f"Downloaded {file_count} files in {context.download_duration:.2f} seconds")
+    except Exception as e:
+        logger.error(f"Failed to download S3 directory: {str(e)}")
+        raise AssertionError(f"S3 directory download failed: {str(e)}")
+
+@when('I upload file "{local_path}" to S3 as "{s3_key}"')
+def step_upload_file_to_s3(context, local_path, s3_key):
+    """Upload file to S3."""
+    logger.info(f"Uploading file to S3: {local_path} -> {s3_key}")
+    
+    try:
+        start_time = time.time()
+        context.s3_upload_result = context.s3_connector.upload_file(
+            local_path, context.s3_bucket, s3_key
+        )
+        context.upload_duration = time.time() - start_time
+        logger.info(f"Upload completed in {context.upload_duration:.2f} seconds")
+    except Exception as e:
+        logger.error(f"Failed to upload file to S3: {str(e)}")
+        raise AssertionError(f"S3 upload failed: {str(e)}")
+
+@when('I list S3 objects with prefix')
+def step_list_s3_objects(context):
+    """List S3 objects with prefix."""
+    logger.info("Listing S3 objects with prefix")
+    
+    try:
+        context.s3_objects = context.s3_connector.list_objects(
+            context.s3_bucket, context.s3_prefix
+        )
+        logger.info(f"Found {len(context.s3_objects)} objects")
+    except Exception as e:
+        logger.error(f"Failed to list S3 objects: {str(e)}")
+        raise AssertionError(f"S3 list objects failed: {str(e)}")
+
+@then('S3 file download should be successful')
+def step_verify_s3_download_success(context):
+    """Verify S3 file download was successful."""
+    logger.info("Verifying S3 file download success")
+    
+    assert hasattr(context, 's3_download_result'), "No S3 download result available"
+    assert context.s3_download_result == True, "S3 file download failed"
+
+@then('S3 directory download should complete with {expected_files:d} files')
+def step_verify_s3_directory_download(context, expected_files):
+    """Verify S3 directory download completed with expected file count."""
+    logger.info(f"Verifying S3 directory download with {expected_files} files")
+    
+    assert hasattr(context, 's3_download_results'), "No S3 download results available"
+    actual_files = context.s3_download_results.get('downloaded_count', 0)
+    
+    assert actual_files == expected_files, f"Expected {expected_files} files, got {actual_files}"
+    
+    # Log performance metrics
+    if hasattr(context, 'download_duration') and actual_files > 0:
+        rate = actual_files / context.download_duration
+        logger.info(f"Download rate: {rate:.2f} files/second")
+
+@then('S3 upload should be successful')
+def step_verify_s3_upload_success(context):
+    """Verify S3 upload was successful."""
+    logger.info("Verifying S3 upload success")
+    
+    assert hasattr(context, 's3_upload_result'), "No S3 upload result available"
+    assert context.s3_upload_result == True, "S3 upload failed"
+
+@then('S3 file "{s3_key}" should exist in bucket')
+def step_verify_s3_file_exists(context, s3_key):
+    """Verify file exists in S3 bucket."""
+    logger.info(f"Verifying S3 file exists: {s3_key}")
+    
+    try:
+        exists = context.s3_connector.object_exists(context.s3_bucket, s3_key)
+        assert exists, f"S3 object {s3_key} not found in bucket {context.s3_bucket}"
+    except Exception as e:
+        logger.error(f"Failed to check S3 object existence: {str(e)}")
+        raise AssertionError(f"S3 object check failed: {str(e)}")
+
+@then('S3 object count should be {expected_count:d}')
+def step_verify_s3_object_count(context, expected_count):
+    """Verify S3 object count matches expected."""
+    assert hasattr(context, 's3_objects'), "No S3 objects list available"
+    actual_count = len(context.s3_objects)
+    
+    assert actual_count == expected_count, f"Expected {expected_count} objects, got {actual_count}"
+
+# AWS-SQL Integration Step Definitions
+@given('AWS-SQL integration is configured')
+def step_aws_sql_integration_configured(context):
+    """Verify AWS-SQL integration is configured."""
+    logger.info("Verifying AWS-SQL integration configuration")
+    context.aws_sql_integration = aws_sql_integration
+
+@given('message table "{table_name}" exists in "{environment}" "{db_type}" database')
+def step_ensure_message_table_exists(context, table_name, environment, db_type):
+    """Ensure message table exists in database."""
+    logger.info(f"Ensuring message table exists: {table_name}")
+    context.message_table = table_name
+    context.db_environment = environment
+    context.db_type = db_type
+    
+    try:
+        # Create table if it doesn't exist
+        context.aws_sql_integration.create_message_table(
+            environment, db_type, table_name
+        )
+    except Exception as e:
+        logger.error(f"Failed to create message table: {str(e)}")
+        raise AssertionError(f"Table creation failed: {str(e)}")
+
+@when('I process SQS queue to SQL database')
+def step_process_sqs_to_sql(context):
+    """Process SQS queue messages to SQL database."""
+    logger.info("Processing SQS queue to SQL database")
+    
+    try:
+        start_time = time.time()
+        context.process_results = context.aws_sql_integration.process_queue_to_sql(
+            context.sqs_queue_url,
+            context.db_environment,
+            context.db_type,
+            table_name=context.message_table
+        )
+        context.process_duration = time.time() - start_time
+        
+        processed = context.process_results.get('processed_count', 0)
+        logger.info(f"Processed {processed} messages in {context.process_duration:.2f} seconds")
+    except Exception as e:
+        logger.error(f"Failed to process SQS to SQL: {str(e)}")
+        raise AssertionError(f"SQS to SQL processing failed: {str(e)}")
+
+@when('I save SQS messages to SQL database')
+def step_save_sqs_messages_to_sql(context):
+    """Save received SQS messages to SQL database."""
+    logger.info("Saving SQS messages to SQL database")
+    
+    messages = getattr(context, 'sqs_received_messages', [])
+    if not messages:
+        logger.warning("No messages to save")
+        context.save_results = {'success_count': 0}
+        return
+    
+    try:
+        context.save_results = context.aws_sql_integration.save_messages_to_sql(
+            messages,
+            context.db_environment,
+            context.db_type,
+            context.sqs_queue_url,
+            context.message_table
+        )
+    except Exception as e:
+        logger.error(f"Failed to save messages to SQL: {str(e)}")
+        raise AssertionError(f"SQL save failed: {str(e)}")
+
+@when('I export messages from SQL to file "{filename}"')
+def step_export_messages_to_file(context, filename):
+    """Export messages from SQL database to file."""
+    logger.info(f"Exporting messages from SQL to file: {filename}")
+    
+    try:
+        context.export_results = context.aws_sql_integration.export_messages_to_file_from_sql(
+            context.db_environment,
+            context.db_type,
+            filename,
+            table_name=context.message_table
+        )
+    except Exception as e:
+        logger.error(f"Failed to export messages: {str(e)}")
+        raise AssertionError(f"SQL export failed: {str(e)}")
+
+@then('SQS messages should be saved to SQL successfully')
+def step_verify_sqs_sql_save(context):
+    """Verify SQS messages were saved to SQL successfully."""
+    logger.info("Verifying SQS messages saved to SQL successfully")
+    
+    assert hasattr(context, 'save_results') or hasattr(context, 'process_results'), \
+        "No save or process results available"
+    
+    results = getattr(context, 'save_results', context.process_results)
+    success_count = results.get('success_count', results.get('processed_count', 0))
+    
+    assert success_count > 0, "No messages were saved successfully"
+    logger.info(f"Successfully saved {success_count} messages")
+
+@then('SQL message export should be successful')
+def step_verify_sql_export_success(context):
+    """Verify SQL message export was successful."""
+    logger.info("Verifying SQL message export success")
+    
+    assert hasattr(context, 'export_results'), "No export results available"
+    assert context.export_results['success'] == True, "SQL message export failed"
+
+@then('exported file should contain {expected_messages:d} messages')
+def step_verify_exported_message_count(context, expected_messages):
+    """Verify exported file contains expected number of messages."""
+    logger.info(f"Verifying exported file contains {expected_messages} messages")
+    
+    assert hasattr(context, 'export_results'), "No export results available"
+    actual_messages = context.export_results.get('messages_exported', 0)
+    
+    assert actual_messages == expected_messages, f"Expected {expected_messages} messages, got {actual_messages}"
+
+# Connection Test Steps
+@then('AWS SQS connection should be successful')
+def step_verify_sqs_connection(context):
+    """Verify AWS SQS connection is successful."""
+    logger.info("Verifying AWS SQS connection")
+    
+    queue_url = getattr(context, 'sqs_queue_url', None)
+    if not queue_url:
+        raise AssertionError("No SQS queue URL set")
+    
+    try:
+        success = context.sqs_connector.test_connection(queue_url)
+        assert success, "AWS SQS connection test failed"
+    except Exception as e:
+        logger.error(f"SQS connection test failed: {str(e)}")
+        raise AssertionError(f"SQS connection test error: {str(e)}")
+
+@then('AWS S3 connection should be successful')
+def step_verify_s3_connection(context):
+    """Verify AWS S3 connection is successful."""
+    logger.info("Verifying AWS S3 connection")
+    
+    bucket_name = getattr(context, 's3_bucket', None)
+    if not bucket_name:
+        raise AssertionError("No S3 bucket name set")
+    
+    try:
+        success = context.s3_connector.test_connection(bucket_name)
+        assert success, "AWS S3 connection test failed"
+    except Exception as e:
+        logger.error(f"S3 connection test failed: {str(e)}")
+        raise AssertionError(f"S3 connection test error: {str(e)}")
+
+# Cleanup Steps
+@then('I cleanup test messages from database')
+def step_cleanup_test_messages(context):
+    """Cleanup test messages from database."""
+    logger.info("Cleaning up test messages from database")
+    
+    try:
+        context.aws_sql_integration.cleanup_test_messages(
+            context.db_environment,
+            context.db_type,
+            context.message_table
+        )
+    except Exception as e:
+        logger.warning(f"Cleanup failed: {str(e)}")
+
+@then('I purge the SQS queue')
+def step_purge_sqs_queue(context):
+    """Purge all messages from SQS queue."""
+    logger.info("Purging SQS queue")
+    
+    try:
+        context.sqs_connector.purge_queue(context.sqs_queue_url)
+        logger.info("Queue purged successfully")
+    except Exception as e:
+        logger.warning(f"Failed to purge queue: {str(e)}")

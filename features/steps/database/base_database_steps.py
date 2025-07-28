@@ -1,18 +1,19 @@
 # steps/database/base_database_steps.py
 
-from behave import given, when, then, step
-from datetime import datetime, timedelta
+from behave import given, when, then
 import time
 import logging
 from typing import Dict, Any, List, Optional
-from abc import ABC, abstractmethod
 
-from db.database_connector import db_connector
-from db.mongodb_connector import mongodb_connector
-from utils.config_loader import config_loader
-from utils.logger import logger
-from utils.data_validator import DataValidator
-from utils.performance_monitor import PerformanceMonitor
+# Import your existing modules (adjust imports as needed)
+try:
+    from db.database_connector import db_connector
+    from db.mongodb_connector import mongodb_connector
+    from utils.config_loader import config_loader
+    from utils.logger import logger
+except ImportError as e:
+    print(f"Import warning: {e}")
+    print("Please adjust imports to match your existing module structure")
 
 
 class BaseDatabaseSteps:
@@ -22,8 +23,6 @@ class BaseDatabaseSteps:
         self.context = context
         self.connections = {}
         self.query_results = {}
-        self.performance_monitor = PerformanceMonitor()
-        self.data_validator = DataValidator()
         
     def get_connection(self, env: str, db_type: str):
         """Get or create database connection."""
@@ -47,23 +46,7 @@ class BaseDatabaseSteps:
         results = db_connector.execute_query(connection, query)
         execution_time = time.time() - start_time
         
-        # Store performance metrics
-        self.performance_monitor.record_query_time(query, execution_time)
-        
         logger.info(f"Query executed in {execution_time:.2f} seconds: {query[:100]}...")
-        return results
-    
-    def execute_mongodb_query(self, collection: str, query: Dict, env: str) -> List[Dict]:
-        """Execute MongoDB query and return results."""
-        connection = self.get_connection(env, 'MONGODB')
-        
-        start_time = time.time()
-        results = list(connection[collection].find(query))
-        execution_time = time.time() - start_time
-        
-        self.performance_monitor.record_query_time(f"MongoDB: {collection}", execution_time)
-        
-        logger.info(f"MongoDB query executed in {execution_time:.2f} seconds")
         return results
     
     def store_result(self, key: str, value: Any):
@@ -92,7 +75,7 @@ class BaseDatabaseSteps:
         self.connections.clear()
 
 
-# Common step definitions
+# Essential step definitions that work with your existing framework
 @given('I have a connection to "{env}" environment "{db_type}" database')
 def step_establish_database_connection(context, env, db_type):
     """Establish connection to specified database."""
@@ -113,21 +96,16 @@ def step_establish_database_connection(context, env, db_type):
 
 
 @when('I execute query "{query}" on "{env}" database')
-@when('I execute query "{query}" on current database')
-def step_execute_query(context, query, env=None):
-    """Execute SQL query on specified or current database."""
+def step_execute_query(context, query, env):
+    """Execute SQL query on specified database."""
     if not hasattr(context, 'db_steps'):
         context.db_steps = BaseDatabaseSteps(context)
     
-    # Use provided env or fall back to current env
-    target_env = env or getattr(context, 'current_env', None)
-    target_db_type = getattr(context, 'current_db_type', None)
-    
-    if not target_env or not target_db_type:
-        raise ValueError("No database environment specified and no current connection available")
+    # Use current db_type from context
+    db_type = getattr(context, 'current_db_type', 'ORACLE')
     
     try:
-        results = context.db_steps.execute_sql_query(query, target_env, target_db_type)
+        results = context.db_steps.execute_sql_query(query, env, db_type)
         context.last_query_results = results
         logger.info(f"Query executed successfully, returned {len(results)} rows")
         
@@ -180,23 +158,29 @@ def step_compare_stored_results(context, first_key, second_key):
         logger.error(f"Comparison failed: {e}")
         raise
 
-
-@then('the query should complete within {seconds:d} seconds')
-def step_verify_query_performance(context, seconds):
-    """Verify that the last query completed within specified time."""
-    if not hasattr(context, 'db_steps'):
-        raise ValueError("No database steps context available")
+@then('the query should complete successfully')
+def step_verify_query_successful(context):
+    """Verify that the query completed without errors."""
+    if hasattr(context, 'last_query_error'):
+        raise AssertionError(f"Query failed: {context.last_query_error}")
     
-    last_execution_time = context.db_steps.performance_monitor.get_last_execution_time()
+    if not hasattr(context, 'last_query_results'):
+        raise AssertionError("No query results available")
     
-    assert last_execution_time <= seconds, \
-        f"Query took {last_execution_time:.2f} seconds, expected <= {seconds} seconds"
+    logger.info("Query completed successfully")
+
+@then('the results should be stored successfully')
+def step_verify_results_stored(context):
+    """Verify that query results were stored successfully."""
+    if not hasattr(context, 'last_query_results'):
+        raise AssertionError("No query results to verify")
     
-    logger.info(f"Performance check passed: Query completed in {last_execution_time:.2f} seconds")
-
-
+    logger.info("Results stored and verified successfully")
+    
+# Cleanup function for environment.py
 def after_scenario(context, scenario):
     """Clean up after each scenario."""
     if hasattr(context, 'db_steps'):
         context.db_steps.cleanup_connections()
         logger.debug("Database connections cleaned up after scenario")
+

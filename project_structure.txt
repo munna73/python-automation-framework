@@ -1,0 +1,95 @@
+[ 832]  ./
+├── [ 160]  api/
+│   ├── [   0]  __init__.py
+│   ├── [ 19K]  json_validator.py
+│   └── [ 15K]  rest_client.py
+├── [ 192]  aws/
+│   ├── [   0]  __init__.py
+│   ├── [ 45K]  s3_connector.py
+│   ├── [ 42K]  sql_integration.py
+│   └── [ 25K]  sqs_connector.py
+├── [ 160]  config/
+│   ├── [4.8K]  config.ini
+│   ├── [7.1K]  database_config.py
+│   └── [2.5K]  environments.yaml
+├── [ 128]  data/
+│   ├── [ 160]  input/
+│   │   ├── [2.9K]  customer.json
+│   │   ├── [ 338]  test_data.txt
+│   │   └── [ 166]  test_message.txt
+│   └── [  96]  schemas/
+│       └── [ 503]  api_schema.json
+├── [ 192]  db/
+│   ├── [   0]  __init__.py
+│   ├── [8.5K]  base_connector.py
+│   ├── [ 18K]  database_connector.py
+│   └── [ 22K]  mongodb_connector.py
+├── [ 256]  features/
+│   ├── [  96]  api/
+│   │   └── [9.6K]  rest_api.feature
+│   ├── [  96]  aws/
+│   │   └── [5.8K]  aws_integration.feature
+│   ├── [ 192]  database/
+│   │   ├── [  96]  cross_database/
+│   │   │   └── [1.7K]  data_sync_validation.feature
+│   │   ├── [ 160]  nosql/
+│   │   │   ├── [ 929]  mongodb_connection.feature
+│   │   │   ├── [1.1K]  mongodb_crud.feature
+│   │   │   └── [3.4K]  mongodb_operations.feature
+│   │   ├── [ 128]  sql/
+│   │   │   ├── [1.1K]  basic_validation.feature
+│   │   │   └── [3.2K]  data_validation.feature
+│   │   └── [3.7K]  data_comparison.feature
+│   ├── [  96]  mq/
+│   │   └── [ 592]  message_queue.feature
+│   ├── [ 256]  steps/
+│   │   ├── [ 192]  database/
+│   │   │   ├── [7.0K]  base_database_steps.py
+│   │   │   ├── [8.9K]  cross_database_steps.py
+│   │   │   ├── [ 16K]  mongodb_steps.py
+│   │   │   └── [ 23K]  sql_database_steps.py
+│   │   ├── [   0]  __init__.py
+│   │   ├── [ 23K]  api_steps.py
+│   │   ├── [ 25K]  aws_steps.py
+│   │   ├── [ 12K]  database_steps.py
+│   │   └── [3.6K]  mq_steps.py
+│   └── [2.8K]  environment.py
+├── [ 224]  logs/
+│   ├── [  96]  api/
+│   ├── [  96]  application/
+│   ├── [  96]  database/
+│   ├── [  96]  mq/
+│   └── [  96]  test_execution/
+├── [ 128]  mq/
+│   ├── [   0]  __init__.py
+│   └── [ 13K]  mq_producer.py
+├── [ 160]  output/
+│   ├── [  96]  exports/
+│   ├── [  96]  junit/
+│   └── [  96]  reports/
+├── [ 128]  scripts/
+│   ├── [   0]  __init__.py
+│   └── [ 14K]  run.py
+├── [ 128]  tests/
+│   ├── [  96]  unit/
+│   └── [   0]  __init__.py
+├── [ 352]  utils/
+│   ├── [   0]  __init__.py
+│   ├── [ 18K]  config_loader.py
+│   ├── [4.5K]  custom_exception.py
+│   ├── [6.9K]  data_cleaner.py
+│   ├── [ 16K]  data_comparator.py
+│   ├── [ 17K]  data_validator.py
+│   ├── [ 13K]  export_utils.py
+│   ├── [3.5K]  logger.py
+│   └── [4.3K]  query_loader.py
+├── [ 16K]  Jenkinsfile
+├── [2.2K]  Makefile
+├── [ 13K]  README.md
+├── [ 118]  behave.ini
+├── [4.2K]  fix_structure.sh*
+├── [   0]  project_structure.txt
+├── [ 735]  requirements.txt
+└── [  97]  tox.ini
+
+33 directories, 60 files
