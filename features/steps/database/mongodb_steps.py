@@ -5,6 +5,7 @@ import time
 import json
 from typing import Dict, List, Any
 from bson import ObjectId
+import re
 
 # Import your existing modules
 try:
@@ -147,16 +148,26 @@ class MongoDBSteps:
 
 
 # MongoDB-specific step definitions
-@when('I count documents in collection "{collection}"')
-def step_count_mongodb_documents(context, collection):
-    """Count documents in MongoDB collection."""
+@when(re.compile(r'I count documents in collection "(?P<collection>.*?)"(?: with query "(?P<query_str>.*?)")?'))
+def step_count_mongodb_documents(context, collection, query_str=None):
+    """Count documents in MongoDB collection, optionally with a query."""
     if not hasattr(context, 'mongodb_steps'):
         context.mongodb_steps = MongoDBSteps(context)
     
     env = getattr(context, 'current_env', 'DEV')
+    query = None
+    
+    if query_str:
+        try:
+            query = json.loads(query_str)
+            logger.info(f"Counting documents in {collection} with query: {query}")
+        except json.JSONDecodeError:
+            raise ValueError(f"Invalid JSON query string: {query_str}")
+    else:
+        logger.info(f"Counting all documents in {collection}")
     
     try:
-        count = context.mongodb_steps.execute_mongodb_count(collection, env)
+        count = context.mongodb_steps.execute_mongodb_count(collection, env, query)
         context.last_query_results = [{'count': count}]
         logger.info(f"Document count in {collection}: {count}")
         
@@ -164,27 +175,6 @@ def step_count_mongodb_documents(context, collection):
         logger.error(f"MongoDB count failed: {e}")
         context.last_query_error = str(e)
         raise
-
-
-@when('I count documents in collection "{collection}" with query "{query_str}"')
-def step_count_mongodb_documents_with_query(context, collection, query_str):
-    """Count documents in MongoDB collection with query."""
-    if not hasattr(context, 'mongodb_steps'):
-        context.mongodb_steps = MongoDBSteps(context)
-    
-    env = getattr(context, 'current_env', 'DEV')
-    
-    try:
-        query = json.loads(query_str)
-        count = context.mongodb_steps.execute_mongodb_count(collection, env, query)
-        context.last_query_results = [{'count': count}]
-        logger.info(f"Document count in {collection} with query: {count}")
-        
-    except Exception as e:
-        logger.error(f"MongoDB count with query failed: {e}")
-        context.last_query_error = str(e)
-        raise
-
 
 @when('I query collection "{collection}" for all documents with fields "{fields_str}"')
 def step_query_mongodb_collection_with_fields(context, collection, fields_str):
@@ -319,9 +309,9 @@ def step_update_document_with_new_data(context):
         raise
 
 
-@when('I query for the inserted document')
-def step_query_inserted_document(context):
-    """Query for the last inserted test document."""
+@when('I retrieve the most recently inserted document')
+def step_retrieve_inserted_document(context):
+    """Retrieve the last inserted test document."""
     if not hasattr(context, 'mongodb_steps'):
         context.mongodb_steps = MongoDBSteps(context)
     
@@ -336,17 +326,17 @@ def step_query_inserted_document(context):
         results = context.mongodb_steps.execute_mongodb_find(collection, env, query)
         context.last_query_results = results
         
-        logger.info(f"Queried for inserted document, found {len(results)} documents")
+        logger.info(f"Retrieved inserted document, found {len(results)} documents")
         
     except Exception as e:
-        logger.error(f"Query for inserted document failed: {e}")
+        logger.error(f"Retrieve inserted document failed: {e}")
         context.last_query_error = str(e)
         raise
 
 
-@when('I query for the updated document')
-def step_query_updated_document(context):
-    """Query for the updated document."""
+@when('I fetch the previously updated document')
+def step_fetch_updated_document(context):
+    """Fetch the document that was previously updated."""
     if not hasattr(context, 'mongodb_steps'):
         context.mongodb_steps = MongoDBSteps(context)
     
@@ -361,12 +351,27 @@ def step_query_updated_document(context):
         results = context.mongodb_steps.execute_mongodb_find(collection, env, query)
         context.last_query_results = results
         
-        logger.info(f"Queried for updated document, found {len(results)} documents")
+        logger.info(f"Fetched updated document, found {len(results)} documents")
         
     except Exception as e:
-        logger.error(f"Query for updated document failed: {e}")
+        logger.error(f"Fetch updated document failed: {e}")
         context.last_query_error = str(e)
         raise
+
+
+# LEGACY SUPPORT - Keep these for backward compatibility but mark as deprecated
+@when('I query for the inserted document')
+def step_query_inserted_document_legacy(context):
+    """DEPRECATED: Use 'I retrieve the most recently inserted document' instead."""
+    logger.warning("Using deprecated step. Please update to 'I retrieve the most recently inserted document'")
+    step_retrieve_inserted_document(context)
+
+
+@when('I query for the updated document')
+def step_query_updated_document_legacy(context):
+    """DEPRECATED: Use 'I fetch the previously updated document' instead."""
+    logger.warning("Using deprecated step. Please update to 'I fetch the previously updated document'")
+    step_fetch_updated_document(context)
 
 
 # Verification steps
@@ -449,15 +454,29 @@ def step_verify_document_contains_updated_data(context):
     logger.info("Document contains all expected updated data")
 
 
-# Cleanup steps
-@when('I clean up the test document')
-@then('I clean up the test document')
-@then('I clean up the migrated test data')
-def step_cleanup_test_documents(context):
-    """Clean up test documents."""
+# FIXED CLEANUP STEPS - No more ambiguity!
+@when('I perform cleanup of test documents')
+def step_cleanup_test_documents_when(context):
+    """Clean up test documents during scenario execution."""
     if hasattr(context, 'mongodb_steps'):
         context.mongodb_steps.cleanup_test_documents()
-        logger.info("Test documents cleaned up successfully")
+        logger.info("Test documents cleaned up during scenario")
+
+
+@then('I should cleanup the test document successfully')  
+def step_cleanup_test_documents_then(context):
+    """Verify test documents are cleaned up successfully."""
+    if hasattr(context, 'mongodb_steps'):
+        context.mongodb_steps.cleanup_test_documents()
+        logger.info("Test documents cleaned up and verified")
+
+
+@then('I should cleanup the migrated test data successfully')
+def step_cleanup_migrated_test_data(context):
+    """Clean up migrated test data after migration tests."""
+    if hasattr(context, 'mongodb_steps'):
+        context.mongodb_steps.cleanup_test_documents()
+        logger.info("Migrated test data cleaned up successfully")
 
 
 # Enhanced cleanup for environment.py
@@ -513,3 +532,126 @@ def step_run_aggregation_pipeline(context, collection):
         logger.error(f"Aggregation pipeline failed: {e}")
         context.last_query_error = str(e)
         raise
+
+
+@when('I create index on collection "{collection}" for field "{field}"')
+def step_create_single_field_index(context, collection, field):
+    """Create a single field index on MongoDB collection."""
+    if not hasattr(context, 'mongodb_steps'):
+        context.mongodb_steps = MongoDBSteps(context)
+    
+    env = getattr(context, 'current_env', 'DEV')
+    
+    try:
+        result = mongodb_connector.create_index(
+            environment=env,
+            collection_name=collection,
+            index_spec=[(field, 1)]  # 1 for ascending, -1 for descending
+        )
+        
+        context.last_index_result = result
+        logger.info(f"Created index on {collection}.{field}")
+        
+    except Exception as e:
+        logger.error(f"Create index failed: {e}")
+        context.last_query_error = str(e)
+        raise
+
+
+@when('I drop collection "{collection}"')
+def step_drop_collection(context, collection):
+    """Drop a MongoDB collection."""
+    if not hasattr(context, 'mongodb_steps'):
+        context.mongodb_steps = MongoDBSteps(context)
+    
+    env = getattr(context, 'current_env', 'DEV')
+    
+    try:
+        result = mongodb_connector.drop_collection(
+            environment=env,
+            collection_name=collection
+        )
+        
+        context.last_drop_result = result
+        logger.info(f"Dropped collection {collection}")
+        
+    except Exception as e:
+        logger.error(f"Drop collection failed: {e}")
+        context.last_query_error = str(e)
+        raise
+
+
+@then('the collection "{collection}" should be empty')
+def step_verify_collection_empty(context, collection):
+    """Verify that a MongoDB collection is empty."""
+    if not hasattr(context, 'mongodb_steps'):
+        context.mongodb_steps = MongoDBSteps(context)
+    
+    env = getattr(context, 'current_env', 'DEV')
+    
+    try:
+        count = context.mongodb_steps.execute_mongodb_count(collection, env)
+        assert count == 0, f"Collection '{collection}' is not empty. Found {count} documents"
+        logger.info(f"Verified collection '{collection}' is empty")
+        
+    except Exception as e:
+        logger.error(f"Verify empty collection failed: {e}")
+        raise
+
+
+@then('the collection "{collection}" should have {expected_count:d} documents')
+def step_verify_collection_document_count(context, collection, expected_count):
+    """Verify the exact number of documents in a MongoDB collection."""
+    if not hasattr(context, 'mongodb_steps'):
+        context.mongodb_steps = MongoDBSteps(context)
+    
+    env = getattr(context, 'current_env', 'DEV')
+    
+    try:
+        actual_count = context.mongodb_steps.execute_mongodb_count(collection, env)
+        assert actual_count == expected_count, \
+            f"Collection '{collection}' has {actual_count} documents, expected {expected_count}"
+        
+        logger.info(f"Verified collection '{collection}' has exactly {expected_count} documents")
+        
+    except Exception as e:
+        logger.error(f"Verify document count failed: {e}")
+        raise
+
+
+@when('I find documents in collection "{collection}" where "{field}" equals "{value}"')
+def step_find_documents_by_field_value(context, collection, field, value):
+    """Find documents in MongoDB collection by field value."""
+    if not hasattr(context, 'mongodb_steps'):
+        context.mongodb_steps = MongoDBSteps(context)
+    
+    env = getattr(context, 'current_env', 'DEV')
+    
+    # Try to convert value to appropriate type
+    try:
+        # Try integer
+        if value.isdigit():
+            query_value = int(value)
+        # Try float
+        elif '.' in value and value.replace('.', '').isdigit():
+            query_value = float(value)
+        # Try boolean
+        elif value.lower() in ['true', 'false']:
+            query_value = value.lower() == 'true'
+        else:
+            query_value = value
+    except:
+        query_value = value
+    
+    query = {field: query_value}
+    
+    try:
+        results = context.mongodb_steps.execute_mongodb_find(collection, env, query)
+        context.last_query_results = results
+        logger.info(f"Found {len(results)} documents in {collection} where {field} = {value}")
+        
+    except Exception as e:
+        logger.error(f"Find documents failed: {e}")
+        context.last_query_error = str(e)
+        raise
+
