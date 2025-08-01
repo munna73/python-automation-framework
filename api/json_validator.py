@@ -9,10 +9,28 @@ from pathlib import Path
 from utils.logger import logger
 
 class JsonValidator:
-    """JSON validation and manipulation utility."""
+    """
+    JSON validation and manipulation utility.
+    
+    This class is implemented as a singleton to ensure only one instance is
+    created and used across the application, which is efficient for managing
+    the schema cache.
+    """
+    _instance = None
+    
+    def __new__(cls):
+        """Create a new instance if one doesn't exist, otherwise return the existing one."""
+        if cls._instance is None:
+            cls._instance = super(JsonValidator, cls).__new__(cls)
+            # Perform initialization only once
+            cls._instance._initialized = False
+        return cls._instance
     
     def __init__(self):
-        """Initialize JSON validator."""
+        """Initialize JSON validator. This is only called on the first instance."""
+        if self._initialized:
+            return
+            
         self.schema_cache = {}
         self.schema_directory = Path(__file__).parent.parent / "schemas"
         
@@ -20,6 +38,7 @@ class JsonValidator:
         self.schema_directory.mkdir(parents=True, exist_ok=True)
         
         logger.info("JSON validator initialized")
+        self._initialized = True
     
     def validate(self, 
                 data: Union[Dict, List], 
@@ -329,6 +348,17 @@ class JsonValidator:
                     'actual': actual_val,
                     'expected': expected_val
                 })
+            elif isinstance(expected_val, dict):
+                compare_dicts(path, actual_val, expected_val)
+            elif isinstance(expected_val, list):
+                compare_lists(path, actual_val, expected_val)
+            elif actual_val != expected_val:
+                differences.append({
+                    'path': path,
+                    'type': 'value_mismatch',
+                    'actual': actual_val,
+                    'expected': expected_val
+                })
         
         def compare_dicts(path: str, actual_dict: Dict, expected_dict: Dict):
             # Check for missing keys
@@ -583,14 +613,3 @@ class JsonValidator:
 
 # Create singleton instance
 json_validator = JsonValidator()
-            elif isinstance(expected_val, dict):
-                compare_dicts(path, actual_val, expected_val)
-            elif isinstance(expected_val, list):
-                compare_lists(path, actual_val, expected_val)
-            elif actual_val != expected_val:
-                differences.append({
-                    'path': path,
-                    'type': 'value_mismatch',
-                    'actual': actual_val,
-                    'expected': expected_val
-                })
