@@ -6,7 +6,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Union
-from sqlalchemy import text
+from sqlalchemy import text, create_engine
 from db.database_connector import db_connector
 from aws.sqs_connector import sqs_connector
 from utils.logger import logger
@@ -17,16 +17,18 @@ class AWSSQLIntegration:
     
     def __init__(self):
         """Initialize AWS-SQL integration."""
+        # Define the schema for the message table.
+        # This dictionary is used to dynamically create tables for different database types.
         self.message_table_schema = {
-            'message_id': 'VARCHAR(255) PRIMARY KEY',
-            'queue_url': 'VARCHAR(500)',
-            'message_body': 'TEXT',
-            'receipt_handle': 'VARCHAR(1000)', 
-            'message_attributes': 'TEXT',
-            'received_timestamp': 'TIMESTAMP',
-            'processed_timestamp': 'TIMESTAMP NULL',
-            'status': 'VARCHAR(50)',
-            'retry_count': 'INTEGER DEFAULT 0'
+            'message_id': {'oracle': 'VARCHAR2(255) PRIMARY KEY', 'postgres': 'VARCHAR(255) PRIMARY KEY'},
+            'queue_url': {'oracle': 'VARCHAR2(500)', 'postgres': 'VARCHAR(500)'},
+            'message_body': {'oracle': 'CLOB', 'postgres': 'TEXT'},
+            'receipt_handle': {'oracle': 'VARCHAR2(1000)', 'postgres': 'VARCHAR(1000)'},
+            'message_attributes': {'oracle': 'CLOB', 'postgres': 'TEXT'},
+            'received_timestamp': {'oracle': 'TIMESTAMP', 'postgres': 'TIMESTAMP'},
+            'processed_timestamp': {'oracle': 'TIMESTAMP', 'postgres': 'TIMESTAMP NULL'},
+            'status': {'oracle': 'VARCHAR2(50)', 'postgres': 'VARCHAR(50)'},
+            'retry_count': {'oracle': 'NUMBER DEFAULT 0', 'postgres': 'INTEGER DEFAULT 0'}
         }
     
     def create_message_table(self, 
@@ -34,7 +36,7 @@ class AWSSQLIntegration:
                            db_type: str, 
                            table_name: str = 'aws_sqs_messages') -> bool:
         """
-        Create table for storing SQS messages.
+        Create table for storing SQS messages based on the schema dictionary.
         
         Args:
             environment: Database environment
@@ -44,42 +46,32 @@ class AWSSQLIntegration:
         Returns:
             True if successful, False otherwise
         """
+        db_type = db_type.upper()
+        
         try:
             logger.info(f"Creating SQS message table: {table_name}")
             
-            if db_type.upper() == 'ORACLE':
-                create_sql = f"""
-                CREATE TABLE {table_name} (
-                    message_id VARCHAR2(255) PRIMARY KEY,
-                    queue_url VARCHAR2(500),
-                    message_body CLOB,
-                    receipt_handle VARCHAR2(1000),
-                    message_attributes CLOB,
-                    received_timestamp TIMESTAMP,
-                    processed_timestamp TIMESTAMP,
-                    status VARCHAR2(50),
-                    retry_count NUMBER DEFAULT 0
-                )
-                """
-            elif db_type.upper() == 'POSTGRES':
-                create_sql = f"""
-                CREATE TABLE IF NOT EXISTS {table_name} (
-                    message_id VARCHAR(255) PRIMARY KEY,
-                    queue_url VARCHAR(500),
-                    message_body TEXT,
-                    receipt_handle VARCHAR(1000),
-                    message_attributes TEXT,
-                    received_timestamp TIMESTAMP,
-                    processed_timestamp TIMESTAMP,
-                    status VARCHAR(50),
-                    retry_count INTEGER DEFAULT 0
-                )
-                """
-            elif db_type.upper() == 'MONGODB':
+            if db_type == 'MONGODB':
                 return self.create_message_collection(environment, table_name)
-            else:
+            
+            if db_type not in ['ORACLE', 'POSTGRES']:
                 logger.error(f"Unsupported database type for table creation: {db_type}")
                 return False
+
+            columns = []
+            for col_name, col_types in self.message_table_schema.items():
+                col_definition = col_types.get(db_type.lower())
+                if col_definition:
+                    columns.append(f"{col_name} {col_definition}")
+            
+            # The 'IF NOT EXISTS' clause is supported by Postgres but not Oracle.
+            create_sql_template = "CREATE TABLE {if_not_exists} {table_name} (\n" + ",\n".join(columns) + "\n)"
+            if_not_exists = "IF NOT EXISTS" if db_type == 'POSTGRES' else ""
+            
+            create_sql = create_sql_template.format(
+                if_not_exists=if_not_exists,
+                table_name=table_name
+            )
             
             # Execute create table
             engine = db_connector.get_sqlalchemy_engine(environment, db_type)
@@ -98,7 +90,7 @@ class AWSSQLIntegration:
             return False
     
     def create_message_collection(self, environment: str, collection_name: str = 'aws_sqs_messages') -> bool:
-        """Create MongoDB collection for messages."""
+        """Create MongoDB collection for messages with indexes."""
         try:
             db = db_connector.get_mongodb_connection(environment)
             
@@ -134,12 +126,97 @@ class AWSSQLIntegration:
                     try:
                         connection.execute(text(index_sql))
                     except Exception as e:
-                        logger.debug(f"Index might already exist: {e}")
+                        logger.debug(f"Index might already exist or a creation error occurred: {e}")
                 connection.commit()
                 
         except Exception as e:
             logger.warning(f"Failed to create indexes: {e}")
     
+    def _save_messages_to_mongodb(self,
+                                 messages: List[Dict[str, Any]],
+                                 environment: str,
+                                 queue_url: str,
+                                 collection_name: str) -> Dict[str, Any]:
+        """
+        Save SQS messages to MongoDB collection.
+        
+        Args:
+            messages: List of SQS messages
+            environment: Database environment
+            queue_url: SQS queue URL
+            collection_name: MongoDB collection name
+            
+        Returns:
+            Save operation results
+        """
+        try:
+            logger.info(f"Saving {len(messages)} SQS messages to MongoDB collection: {collection_name}")
+            db = db_connector.get_mongodb_connection(environment)
+            collection = db[collection_name]
+            
+            if not messages:
+                return {'success_count': 0, 'error_count': 0, 'errors': [], 'duplicates': 0}
+            
+            # Check for existing messages to avoid duplicates
+            message_ids = [msg.get('MessageId') for msg in messages if msg.get('MessageId')]
+            existing_ids = set()
+            if message_ids:
+                existing_docs = list(collection.find({'message_id': {'$in': message_ids}}, {'message_id': 1}))
+                existing_ids = {doc['message_id'] for doc in existing_docs}
+            
+            records_to_insert = []
+            for message in messages:
+                msg_id = message.get('MessageId')
+                if msg_id and msg_id not in existing_ids:
+                    record = {
+                        'message_id': msg_id,
+                        'queue_url': queue_url,
+                        'message_body': message.get('Body', ''),
+                        'receipt_handle': message.get('ReceiptHandle', ''),
+                        'message_attributes': message.get('MessageAttributes', {}),
+                        'received_timestamp': datetime.now(),
+                        'processed_timestamp': None,
+                        'status': 'RECEIVED',
+                        'retry_count': 0
+                    }
+                    records_to_insert.append(record)
+
+            if not records_to_insert:
+                logger.warning(f"All {len(messages)} messages were duplicates")
+                return {
+                    'success_count': 0,
+                    'error_count': 0,
+                    'errors': [],
+                    'duplicates': len(messages),
+                    'table_name': collection_name,
+                    'total_records': len(messages)
+                }
+
+            result = collection.insert_many(records_to_insert)
+            
+            results = {
+                'success_count': len(result.inserted_ids),
+                'error_count': 0,
+                'errors': [],
+                'duplicates': len(messages) - len(result.inserted_ids),
+                'table_name': collection_name,
+                'total_records': len(messages)
+            }
+
+            logger.info(f"Successfully saved {len(result.inserted_ids)} messages to {collection_name}")
+            return results
+
+        except Exception as e:
+            logger.error(f"Failed to save messages to MongoDB: {e}")
+            return {
+                'success_count': 0,
+                'error_count': len(messages),
+                'errors': [str(e)],
+                'duplicates': 0,
+                'table_name': collection_name,
+                'total_records': len(messages)
+            }
+
     def save_messages_to_sql(self, 
                            messages: List[Dict[str, Any]], 
                            environment: str, 
@@ -159,6 +236,10 @@ class AWSSQLIntegration:
         Returns:
             Save operation results
         """
+        db_type = db_type.upper()
+        if db_type == 'MONGODB':
+            return self._save_messages_to_mongodb(messages, environment, queue_url, table_name)
+
         try:
             logger.info(f"Saving {len(messages)} SQS messages to SQL database")
             
@@ -167,18 +248,22 @@ class AWSSQLIntegration:
             
             # Check for existing messages to avoid duplicates
             message_ids = [msg.get('MessageId') for msg in messages if msg.get('MessageId')]
+            existing_ids = set()
             duplicates = 0
             
-            if message_ids and db_type.upper() != 'MONGODB':
-                placeholders = ','.join(['?' if db_type.upper() == 'POSTGRES' else ':p' + str(i) 
-                                       for i in range(len(message_ids))])
+            if message_ids:
+                # Use parameterized query for safe execution
+                placeholders = ', '.join([f":id{i}" for i in range(len(message_ids))])
+                params = {f"id{i}": msg_id for i, msg_id in enumerate(message_ids)}
+                
                 existing_query = f"SELECT message_id FROM {table_name} WHERE message_id IN ({placeholders})"
                 
-                existing_df = db_connector.execute_query(environment, db_type, existing_query, message_ids)
-                existing_ids = set(existing_df['message_id'].tolist()) if not existing_df.empty else set()
+                engine = db_connector.get_sqlalchemy_engine(environment, db_type)
+                with engine.connect() as connection:
+                    result = connection.execute(text(existing_query), **params)
+                    existing_ids = {row[0] for row in result}
+
                 duplicates = len(existing_ids)
-            else:
-                existing_ids = set()
             
             # Prepare data for insertion
             records = []
@@ -205,14 +290,15 @@ class AWSSQLIntegration:
                     'error_count': 0,
                     'errors': [],
                     'duplicates': duplicates,
-                    'table_name': table_name
+                    'table_name': table_name,
+                    'total_records': len(messages)
                 }
             
             # Convert to DataFrame and save
             df = pd.DataFrame(records)
             
             engine = db_connector.get_sqlalchemy_engine(environment, db_type)
-            rows_inserted = df.to_sql(table_name, engine, if_exists='append', index=False)
+            df.to_sql(table_name, engine, if_exists='append', index=False)
             
             results = {
                 'success_count': len(records),
@@ -577,7 +663,7 @@ class AWSSQLIntegration:
             
             engine = db_connector.get_sqlalchemy_engine(environment, db_type)
             with engine.connect() as connection:
-                result = connection.execute(
+                connection.execute(
                     update_sql,
                     status=new_status,
                     timestamp=datetime.now(),
@@ -618,22 +704,21 @@ class AWSSQLIntegration:
                     WHERE received_timestamp < SYSDATE - :days
                     AND status IN ('PROCESSED', 'FAILED')
                 """)
+                params = {'days': days_to_keep}
             elif db_type.upper() == 'POSTGRES':
                 cleanup_sql = text(f"""
                     DELETE FROM {table_name} 
                     WHERE received_timestamp < CURRENT_TIMESTAMP - INTERVAL '{days_to_keep} days'
                     AND status IN ('PROCESSED', 'FAILED')
                 """)
+                params = {}
             else:
                 logger.error(f"Cleanup not implemented for {db_type}")
                 return False
             
             engine = db_connector.get_sqlalchemy_engine(environment, db_type)
             with engine.connect() as connection:
-                if db_type.upper() == 'ORACLE':
-                    result = connection.execute(cleanup_sql, days=days_to_keep)
-                else:
-                    result = connection.execute(cleanup_sql)
+                result = connection.execute(cleanup_sql, **params)
                 connection.commit()
                 
                 deleted_count = result.rowcount
@@ -757,7 +842,8 @@ class AWSSQLIntegration:
             # Create archive table if doesn't exist
             self.create_message_table(environment, db_type, archive_table)
             
-            if db_type.upper() == 'ORACLE':
+            db_type = db_type.upper()
+            if db_type == 'ORACLE':
                 archive_sql = text(f"""
                     INSERT INTO {archive_table}
                     SELECT * FROM {table_name}
@@ -770,7 +856,8 @@ class AWSSQLIntegration:
                     WHERE received_timestamp < SYSDATE - :days
                     AND status IN ('PROCESSED', 'FAILED')
                 """)
-            elif db_type.upper() == 'POSTGRES':
+                params = {'days': days_to_keep}
+            elif db_type == 'POSTGRES':
                 archive_sql = text(f"""
                     INSERT INTO {archive_table}
                     SELECT * FROM {table_name}
@@ -783,273 +870,32 @@ class AWSSQLIntegration:
                     WHERE received_timestamp < CURRENT_TIMESTAMP - INTERVAL '{days_to_keep} days'
                     AND status IN ('PROCESSED', 'FAILED')
                 """)
+                params = {}
             else:
-                return {'archived': 0, 'error': f'Archive not implemented for {db_type}'}
+                logger.error(f"Archiving not implemented for {db_type}")
+                return {'archived_count': 0, 'deleted_count': 0, 'success': False}
             
             engine = db_connector.get_sqlalchemy_engine(environment, db_type)
             with engine.connect() as connection:
-                # Archive messages
-                if db_type.upper() == 'ORACLE':
-                    archive_result = connection.execute(archive_sql, days=days_to_keep)
-                else:
-                    archive_result = connection.execute(archive_sql)
-                
+                # First, insert old messages into the archive table
+                archive_result = connection.execute(archive_sql, **params)
                 archived_count = archive_result.rowcount
+                logger.info(f"Archived {archived_count} messages.")
                 
-                # Delete from main table
-                if db_type.upper() == 'ORACLE':
-                    delete_result = connection.execute(delete_sql, days=days_to_keep)
-                else:
-                    delete_result = connection.execute(delete_sql)
-                    
+                # Then, delete those messages from the main table
+                delete_result = connection.execute(delete_sql, **params)
+                deleted_count = delete_result.rowcount
+                logger.info(f"Deleted {deleted_count} messages from main table.")
+
                 connection.commit()
             
-            logger.info(f"Archived {archived_count} messages")
-            return {'archived': archived_count, 'deleted': delete_result.rowcount}
+            return {
+                'archived_count': archived_count,
+                'deleted_count': deleted_count,
+                'success': True
+            }
             
         except Exception as e:
             logger.error(f"Failed to archive messages: {e}")
-            return {'archived': 0, 'error': str(e)}
-    
-    def get_processing_metrics(self, 
-                             environment: str, 
-                             db_type: str,
-                             table_name: str = 'aws_sqs_messages') -> Dict[str, Any]:
-        """
-        Get processing metrics for messages.
-        
-        Args:
-            environment: Database environment
-            db_type: Database type
-            table_name: Table name
-            
-        Returns:
-            Processing metrics
-        """
-        try:
-            if db_type.upper() == 'ORACLE':
-                metrics_query = text(f"""
-                    SELECT 
-                        status,
-                        COUNT(*) as count,
-                        MIN(received_timestamp) as oldest,
-                        MAX(received_timestamp) as newest,
-                        AVG(EXTRACT(DAY FROM (processed_timestamp - received_timestamp)) * 24 * 60 * 60 +
-                            EXTRACT(HOUR FROM (processed_timestamp - received_timestamp)) * 60 * 60 +
-                            EXTRACT(MINUTE FROM (processed_timestamp - received_timestamp)) * 60 +
-                            EXTRACT(SECOND FROM (processed_timestamp - received_timestamp))) as avg_processing_time
-                    FROM {table_name}
-                    WHERE processed_timestamp IS NOT NULL
-                    GROUP BY status
-                """
-            elif db_type.upper() == 'POSTGRES':
-                metrics_query = text(f"""
-                    SELECT 
-                        status,
-                        COUNT(*) as count,
-                        MIN(received_timestamp) as oldest,
-                        MAX(received_timestamp) as newest,
-                        AVG(EXTRACT(EPOCH FROM (processed_timestamp - received_timestamp))) as avg_processing_time
-                    FROM {table_name}
-                    WHERE processed_timestamp IS NOT NULL
-                    GROUP BY status
-                """)
-            else:
-                return {'error': f'Metrics not implemented for {db_type}'}
-            
-            engine = db_connector.get_sqlalchemy_engine(environment, db_type)
-            df = pd.read_sql_query(metrics_query, engine)
-            
-            if df.empty:
-                return {
-                    'status_counts': {},
-                    'total_messages': 0,
-                    'oldest_message': None,
-                    'newest_message': None,
-                    'avg_processing_time_seconds': 0
-                }
-            
-            # Get total count
-            total_query = text(f"SELECT COUNT(*) as total FROM {table_name}")
-            total_df = pd.read_sql_query(total_query, engine)
-            total_count = total_df['total'].iloc[0]
-            
-            # Process results
-            status_counts = df.set_index('status')['count'].to_dict()
-            
-            return {
-                'status_counts': status_counts,
-                'total_messages': total_count,
-                'oldest_message': df['oldest'].min().isoformat() if pd.notna(df['oldest'].min()) else None,
-                'newest_message': df['newest'].max().isoformat() if pd.notna(df['newest'].max()) else None,
-                'avg_processing_time_seconds': float(df['avg_processing_time'].mean()) if pd.notna(df['avg_processing_time'].mean()) else 0
-            }
-            
-        except Exception as e:
-            logger.error(f"Failed to get metrics: {e}")
-            return {'error': str(e)}
-    
-    def get_queue_statistics(self, 
-                           environment: str, 
-                           db_type: str,
-                           queue_url: str = None,
-                           table_name: str = 'aws_sqs_messages') -> Dict[str, Any]:
-        """
-        Get statistics for specific queue or all queues.
-        
-        Args:
-            environment: Database environment
-            db_type: Database type
-            queue_url: Optional specific queue URL
-            table_name: Table name
-            
-        Returns:
-            Queue statistics
-        """
-        try:
-            if queue_url:
-                stats_query = text(f"""
-                    SELECT 
-                        queue_url,
-                        COUNT(*) as total_messages,
-                        SUM(CASE WHEN status = 'RECEIVED' THEN 1 ELSE 0 END) as pending,
-                        SUM(CASE WHEN status = 'PROCESSED' THEN 1 ELSE 0 END) as processed,
-                        SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) as failed,
-                        SUM(CASE WHEN status = 'RETRIED' THEN 1 ELSE 0 END) as retried,
-                        MAX(received_timestamp) as last_received
-                    FROM {table_name}
-                    WHERE queue_url = :queue_url
-                    GROUP BY queue_url
-                """)
-                params = {'queue_url': queue_url}
-            else:
-                stats_query = text(f"""
-                    SELECT 
-                        queue_url,
-                        COUNT(*) as total_messages,
-                        SUM(CASE WHEN status = 'RECEIVED' THEN 1 ELSE 0 END) as pending,
-                        SUM(CASE WHEN status = 'PROCESSED' THEN 1 ELSE 0 END) as processed,
-                        SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) as failed,
-                        SUM(CASE WHEN status = 'RETRIED' THEN 1 ELSE 0 END) as retried,
-                        MAX(received_timestamp) as last_received
-                    FROM {table_name}
-                    GROUP BY queue_url
-                    ORDER BY total_messages DESC
-                """)
-                params = {}
-            
-            engine = db_connector.get_sqlalchemy_engine(environment, db_type)
-            df = pd.read_sql_query(stats_query, engine, params=params)
-            
-            if df.empty:
-                return {'queues': [], 'total_queues': 0}
-            
-            # Convert to list of dictionaries
-            queues = []
-            for _, row in df.iterrows():
-                queue_stats = {
-                    'queue_url': row['queue_url'],
-                    'total_messages': int(row['total_messages']),
-                    'pending': int(row['pending']),
-                    'processed': int(row['processed']),
-                    'failed': int(row['failed']),
-                    'retried': int(row['retried']),
-                    'last_received': row['last_received'].isoformat() if pd.notna(row['last_received']) else None
-                }
-                queues.append(queue_stats)
-            
-            return {
-                'queues': queues,
-                'total_queues': len(queues)
-            }
-            
-        except Exception as e:
-            logger.error(f"Failed to get queue statistics: {e}")
-            return {'error': str(e)}
-    
-    def process_messages_with_callback(self,
-                                     environment: str,
-                                     db_type: str,
-                                     processor_func: callable,
-                                     status_filter: str = 'RECEIVED',
-                                     batch_size: int = 100,
-                                     table_name: str = 'aws_sqs_messages') -> Dict[str, Any]:
-        """
-        Process messages with a custom callback function.
-        
-        Args:
-            environment: Database environment
-            db_type: Database type
-            processor_func: Function to process each message
-            status_filter: Status filter for messages to process
-            batch_size: Number of messages to process in batch
-            table_name: Table name
-            
-        Returns:
-            Processing results
-        """
-        try:
-            processed_count = 0
-            failed_count = 0
-            
-            while True:
-                # Get batch of messages
-                df = self.download_messages_from_sql(
-                    environment, db_type, table_name, 
-                    status_filter=status_filter, 
-                    limit=batch_size
-                )
-                
-                if df.empty:
-                    break
-                
-                for _, row in df.iterrows():
-                    try:
-                        # Process message
-                        processor_func(row.to_dict())
-                        
-                        # Update status to processed
-                        self.update_message_status(
-                            environment, db_type,
-                            row['message_id'],
-                            'PROCESSED',
-                            table_name
-                        )
-                        
-                        processed_count += 1
-                        
-                    except Exception as e:
-                        logger.error(f"Failed to process message {row['message_id']}: {e}")
-                        
-                        # Update status to failed
-                        self.update_message_status(
-                            environment, db_type,
-                            row['message_id'],
-                            'FAILED',
-                            table_name
-                        )
-                        
-                        failed_count += 1
-                
-                logger.info(f"Processed batch: {processed_count} successful, {failed_count} failed")
-                
-                # Break if we processed less than batch size (no more messages)
-                if len(df) < batch_size:
-                    break
-            
-            return {
-                'processed': processed_count,
-                'failed': failed_count,
-                'total': processed_count + failed_count
-            }
-            
-        except Exception as e:
-            logger.error(f"Failed to process messages with callback: {e}")
-            return {
-                'processed': processed_count,
-                'failed': failed_count,
-                'error': str(e)
-            }
+            return {'archived_count': 0, 'deleted_count': 0, 'success': False, 'error': str(e)}
 
-# Global AWS-SQL integration instance
-aws_sql_integration = AWSSQLIntegration()
