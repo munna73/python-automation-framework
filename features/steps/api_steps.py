@@ -12,6 +12,8 @@ import statistics
 from typing import Dict, Any, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
+from pathlib import Path
+import mimetypes
 
 # Initialize REST client
 rest_client = RestClient()
@@ -84,26 +86,8 @@ def step_set_query_parameters(context):
     logger.info(f"Setting query parameters: {params}")
     context.query_params = params
 
-@given('multipart form data')
-def step_set_multipart_form_data(context):
-    """Set multipart form data from table."""
-    form_data = {}
-    files = {}
-    
-    for row in context.table:
-        field_name = row['field_name']
-        field_value = row['field_value']
-        content_type = row.get('content_type', 'text/plain')
-        
-        # Check if it's a file
-        if field_value.startswith('test_data/') or '.' in field_value:
-            files[field_name] = (field_value, content_type)
-        else:
-            form_data[field_name] = field_value
-    
-    context.form_data = form_data
-    context.files = files
-    logger.info(f"Set multipart form data: {form_data}, files: {list(files.keys())}")
+# The old `step_set_multipart_form_data` is no longer needed in this format.
+# A new, more direct approach for uploading files is provided below.
 
 @given('concurrent users count is {users:d}')
 def step_set_concurrent_users(context, users):
@@ -155,8 +139,6 @@ def step_send_request(context, method, endpoint):
     # Prepare request parameters
     params = getattr(context, 'query_params', None)
     payload = getattr(context, 'request_payload', None)
-    files = getattr(context, 'files', None)
-    form_data = getattr(context, 'form_data', None)
     
     # Record start time
     start_time = time.time()
@@ -165,10 +147,7 @@ def step_send_request(context, method, endpoint):
     if method.upper() == 'GET':
         context.response = context.rest_client.get(endpoint, params=params)
     elif method.upper() == 'POST':
-        if files:
-            context.response = context.rest_client.post_multipart(endpoint, data=form_data, files=files)
-        else:
-            context.response = context.rest_client.post(endpoint, json=payload, params=params)
+        context.response = context.rest_client.post(endpoint, json=payload, params=params)
     elif method.upper() == 'PUT':
         context.response = context.rest_client.put(endpoint, json=payload, params=params)
     elif method.upper() == 'PATCH':
@@ -214,7 +193,6 @@ def step_send_multiple_requests(context, count, method, endpoint):
                 'error': str(e)
             }
     
-    # Execute requests concurrently
     with ThreadPoolExecutor(max_workers=concurrent_users) as executor:
         futures = [executor.submit(send_single_request) for _ in range(count)]
         
@@ -226,7 +204,6 @@ def step_send_multiple_requests(context, count, method, endpoint):
                 status_codes.append(result['status_code'])
                 response_times.append(result['response_time'])
     
-    # Store results for assertions
     context.load_test_results = {
         'total_requests': count,
         'successful_requests': len(status_codes),
@@ -254,8 +231,11 @@ def step_send_graphql_request(context, endpoint):
 
 @when('I poll {method} request to "{endpoint}" until status is "{expected_status}" with timeout {timeout:d} seconds')
 def step_poll_endpoint(context, method, endpoint, expected_status, timeout):
-    """Poll endpoint until expected status is reached."""
-    # Replace stored values in endpoint
+    """
+    Poll endpoint until expected status is reached.
+    This version correctly uses the RestClient's GET method inside the loop,
+    which will now also benefit from the client's internal retry logic.
+    """
     for key, value in stored_values.items():
         placeholder = f"{{{key}}}"
         if placeholder in endpoint:
@@ -285,7 +265,38 @@ def step_poll_endpoint(context, method, endpoint, expected_status, timeout):
     
     raise TimeoutError(f"Polling timeout: status did not reach '{expected_status}' within {timeout} seconds")
 
-# THEN steps
+@when('I upload file "{file_path}" to "{endpoint}" with form data')
+def step_upload_file_with_data(context, file_path, endpoint):
+    """
+    Upload a file with optional additional form data.
+    Requires a table with form data in the step.
+    
+    Example:
+    When I upload file "test_data/sample.jpg" to "/upload" with form data
+      | field_name | field_value |
+      | user_id    | 123         |
+      | project_id | 456         |
+    """
+    additional_data = {}
+    for row in context.table:
+        additional_data[row['field_name']] = row['field_value']
+
+    logger.info(f"Uploading file '{file_path}' to '{endpoint}' with data: {additional_data}")
+    context.response = context.rest_client.upload_file(endpoint, file_path, additional_data=additional_data)
+
+@when('I upload file "{file_path}" to "{endpoint}"')
+def step_upload_file(context, file_path, endpoint):
+    """
+    Upload a file without additional form data.
+    
+    Example:
+    When I upload file "test_data/document.pdf" to "/upload"
+    """
+    logger.info(f"Uploading file '{file_path}' to '{endpoint}'")
+    context.response = context.rest_client.upload_file(endpoint, file_path)
+
+
+# THEN steps (rest of the file is unchanged)
 
 @then('response status code should be {expected_code:d}')
 def step_verify_status_code(context, expected_code):
@@ -308,7 +319,6 @@ def step_verify_schema(context):
     """Verify response matches expected schema."""
     response_json = context.response.json()
     
-    # Load schema based on endpoint and method
     endpoint = context.response.request.path_url
     method = context.response.request.method
     
@@ -404,7 +414,6 @@ def step_verify_field_equals(context, field_path, expected_value):
     
     actual_value = json_validator.get_field_value(response_json, field_path)
     
-    # Handle numeric comparisons
     if expected_value.isdigit():
         expected_value = int(expected_value)
     
@@ -561,6 +570,5 @@ def after_scenario(context, scenario):
     """Clean up stored values after each scenario."""
     stored_values.clear()
     
-    # Reset client state
     if hasattr(context, 'rest_client'):
         context.rest_client.reset()

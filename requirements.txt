@@ -1,52 +1,9 @@
-# BDD Framework
-behave==1.2.6
-behave-html-formatter==0.9.10
-
-# API Testing
-requests==2.31.0
-jsonschema==4.20.0
-urllib3==2.1.0
-
-# Database Connectors
-pymongo==4.6.1
-psycopg2-binary==2.9.9
-cx-Oracle==8.3.0
-SQLAlchemy==2.0.23
-pandas==2.1.4
-
-# AWS SDK
-boto3==1.34.14
-botocore==1.34.14
-
-# Message Queue
-pika==1.3.2
-redis==5.0.1
-celery==5.3.4
-
-# Utilities
-python-dotenv==1.0.0
-PyYAML==6.0.1
-python-dateutil==2.8.2
-pytz==2023.3
-
-# Logging and Reporting
-colorlog==6.8.0
-allure-behave==2.13.2
-pytest==7.4.3
-pytest-html==4.1.1
-
-# Data Processing
-openpyxl==3.1.2
-xlrd==2.0.1
-numpy==1.26.2
-
-# Development Tools
-pylint==3.0.3
-black==23.12.1
-coverage==7.3.4
-tox==4.11.4
-
-# Additional Testing Tools
-faker==21.0.0
-paramiko==3.4.0
-cryptography==41.0.7
+behave
+jsonschema
+pandas
+requests
+pymqi
+boto3
+SQLAlchemy
+pymongo
+PyYAML

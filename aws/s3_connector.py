@@ -1,5 +1,8 @@
 """
 AWS S3 connector for downloading and uploading files from S3 buckets.
+This is a robust and feature-rich connector that handles single and parallel
+file operations, including directory synchronization, with progress reporting
+and error handling.
 """
 import boto3
 import os
@@ -72,7 +75,65 @@ class S3Connector:
         except Exception as e:
             logger.error(f"Failed to setup AWS S3 connection: {e}")
             raise
+
+    def _create_progress_callback(self, filename: str, operation: str, total_size: int = None):
+        """
+        Creates a callback function to report progress of S3 operations.
+        
+        Args:
+            filename: The name of the file being processed.
+            operation: The operation type, e.g., 'download' or 'upload'.
+            total_size: The total size of the file in bytes.
+        
+        Returns:
+            A callable progress callback function.
+        """
+        # This is an example callback. In a real-world application,
+        # you might update a UI or use a more sophisticated logger.
+        if total_size:
+            uploaded_bytes = [0]
+            
+            def progress_callback(bytes_amount: int):
+                uploaded_bytes[0] += bytes_amount
+                progress_percent = (uploaded_bytes[0] / total_size) * 100
+                if progress_percent % 10 == 0:
+                    logger.info(f"Progress for {operation} {filename}: {progress_percent:.0f}%")
+        else:
+            # Simple version for when total size isn't known upfront (e.g., download)
+            bytes_transferred = [0]
+            
+            def progress_callback(bytes_amount: int):
+                bytes_transferred[0] += bytes_amount
+                logger.debug(f"Transferred {bytes_transferred[0]} bytes for {filename}")
+        
+        return progress_callback
     
+    def _verify_file_checksum(self, file_path: str, expected_etag: str) -> bool:
+        """
+        Calculates MD5 checksum of a local file and compares it to an S3 ETag.
+        Note: ETag is not always a simple MD5 hash.
+        
+        Args:
+            file_path: Path to the local file.
+            expected_etag: The ETag from the S3 object.
+            
+        Returns:
+            True if checksums match, False otherwise.
+        """
+        try:
+            file_hash = hashlib.md5()
+            with open(file_path, "rb") as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    file_hash.update(chunk)
+            
+            # For multi-part uploads, ETag is hash-of-hashes. Simple MD5 is for single-part.
+            # This simplified check works for objects uploaded in a single part.
+            local_etag = file_hash.hexdigest()
+            return local_etag == expected_etag
+        except Exception as e:
+            logger.error(f"Error verifying checksum for {file_path}: {e}")
+            return False
+            
     def download_file(self, 
                      bucket_name: str, 
                      s3_key: str, 
@@ -96,8 +157,11 @@ class S3Connector:
             local_path.parent.mkdir(parents=True, exist_ok=True)
             
             # Get object info for verification
+            object_info = {}
             if verify_checksum:
                 object_info = self.get_object_info(bucket_name, s3_key)
+                if not object_info:
+                    return False
                 expected_etag = object_info['etag']
             
             # Download file with progress callback
@@ -827,370 +891,43 @@ class S3Connector:
                 'last_modified': response['LastModified'],
                 'content_type': response.get('ContentType', 'binary/octet-stream'),
                 'etag': response['ETag'].strip('"'),
-                'storage_class': response.get('StorageClass', 'STANDARD'),
-                'metadata': response.get('Metadata', {}),
-                'version_id': response.get('VersionId'),
-                'cache_control': response.get('CacheControl'),
-                'content_encoding': response.get('ContentEncoding'),
-                'expires': response.get('Expires')
+                'storage_class': response.get('StorageClass'),
+                'metadata': response.get('Metadata', {})
             }
-            
-            logger.info(f"Retrieved S3 object info: s3://{bucket_name}/{s3_key}")
             return object_info
-            
         except ClientError as e:
             error_code = e.response['Error']['Code']
             if error_code == '404':
-                logger.error(f"S3 object not found: s3://{bucket_name}/{s3_key}")
+                logger.warning(f"Object not found: s3://{bucket_name}/{s3_key}")
+                return None
             else:
-                logger.error(f"Failed to get S3 object info: {e}")
-            raise
+                logger.error(f"Error getting object info: {e}")
+                raise
         except Exception as e:
-            logger.error(f"Unexpected error getting S3 object info: {e}")
+            logger.error(f"Unexpected error getting object info: {e}")
             raise
-    
-    def generate_presigned_url(self,
-                             bucket_name: str,
-                             s3_key: str,
-                             expiration: int = 3600,
-                             http_method: str = 'GET') -> Optional[str]:
+            
+    def get_object_metadata(self, bucket_name: str, s3_key: str) -> Optional[Dict[str, str]]:
         """
-        Generate a presigned URL for S3 object access.
+        Get custom metadata for an S3 object.
         
         Args:
             bucket_name: S3 bucket name
             s3_key: S3 object key
-            expiration: URL expiration time in seconds
-            http_method: HTTP method ('GET' or 'PUT')
-            
-        Returns:
-            Presigned URL or None if failed
-        """
-        try:
-            if http_method.upper() == 'GET':
-                client_method = 'get_object'
-            elif http_method.upper() == 'PUT':
-                client_method = 'put_object'
-            else:
-                raise ValueError(f"Unsupported HTTP method: {http_method}")
-            
-            url = self.s3_client.generate_presigned_url(
-                client_method,
-                Params={'Bucket': bucket_name, 'Key': s3_key},
-                ExpiresIn=expiration
-            )
-            
-            logger.info(f"Generated presigned URL for s3://{bucket_name}/{s3_key} "
-                       f"(expires in {expiration}s)")
-            return url
-            
-        except Exception as e:
-            logger.error(f"Failed to generate presigned URL: {e}")
-            return None
-    
-    def get_bucket_info(self, bucket_name: str) -> Dict[str, Any]:
-        """
-        Get information about an S3 bucket.
         
-        Args:
-            bucket_name: S3 bucket name
-            
         Returns:
-            Bucket information
+            A dictionary of metadata, or None if the object is not found.
         """
         try:
-            # Get bucket location
-            location_response = self.s3_client.get_bucket_location(Bucket=bucket_name)
-            location = location_response.get('LocationConstraint', 'us-east-1')
-            
-            # Get bucket versioning
-            versioning_response = self.s3_client.get_bucket_versioning(Bucket=bucket_name)
-            versioning_status = versioning_response.get('Status', 'Disabled')
-            
-            # Get bucket encryption
-            try:
-                encryption_response = self.s3_client.get_bucket_encryption(Bucket=bucket_name)
-                encryption = encryption_response.get('ServerSideEncryptionConfiguration', {})
-            except ClientError as e:
-                if e.response['Error']['Code'] == 'ServerSideEncryptionConfigurationNotFoundError':
-                    encryption = None
-                else:
-                    raise
-            
-            # Get bucket size and object count
-            size_info = self._get_bucket_size_info(bucket_name)
-            
-            bucket_info = {
-                'name': bucket_name,
-                'location': location or 'us-east-1',
-                'versioning': versioning_status,
-                'encryption': encryption,
-                'size_bytes': size_info['total_size'],
-                'object_count': size_info['object_count'],
-                'created': None  # Creation date not available via API
-            }
-            
-            logger.info(f"Retrieved bucket info for: {bucket_name}")
-            return bucket_info
-            
-        except ClientError as e:
-            logger.error(f"Failed to get bucket info: {e}")
-            raise
-    
-    def _get_bucket_size_info(self, bucket_name: str) -> Dict[str, Any]:
-        """Get bucket size and object count."""
-        total_size = 0
-        object_count = 0
-        
-        try:
-            paginator = self.s3_client.get_paginator('list_objects_v2')
-            pages = paginator.paginate(Bucket=bucket_name)
-            
-            for page in pages:
-                if 'Contents' in page:
-                    for obj in page['Contents']:
-                        total_size += obj['Size']
-                        object_count += 1
-            
-            return {
-                'total_size': total_size,
-                'object_count': object_count
-            }
-        except Exception as e:
-            logger.error(f"Error calculating bucket size: {e}")
-            return {'total_size': 0, 'object_count': 0}
-    
-    def create_bucket(self, 
-                     bucket_name: str, 
-                     region: str = None,
-                     enable_versioning: bool = False) -> bool:
-        """
-        Create a new S3 bucket.
-        
-        Args:
-            bucket_name: Bucket name
-            region: AWS region (if None, uses default)
-            enable_versioning: Whether to enable versioning
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            # Create bucket
-            if region and region != 'us-east-1':
-                self.s3_client.create_bucket(
-                    Bucket=bucket_name,
-                    CreateBucketConfiguration={'LocationConstraint': region}
-                )
-            else:
-                self.s3_client.create_bucket(Bucket=bucket_name)
-            
-            logger.info(f"Created S3 bucket: {bucket_name}")
-            
-            # Enable versioning if requested
-            if enable_versioning:
-                self.s3_client.put_bucket_versioning(
-                    Bucket=bucket_name,
-                    VersioningConfiguration={'Status': 'Enabled'}
-                )
-                logger.info(f"Enabled versioning for bucket: {bucket_name}")
-            
-            return True
-            
+            response = self.s3_client.head_object(Bucket=bucket_name, Key=s3_key)
+            return response.get('Metadata')
         except ClientError as e:
             error_code = e.response['Error']['Code']
-            if error_code == 'BucketAlreadyExists':
-                logger.error(f"Bucket already exists: {bucket_name}")
+            if error_code == '404':
+                return None
             else:
-                logger.error(f"Failed to create bucket: {e}")
-            return False
-    
-    def sync_directories(self,
-                        source_bucket: str,
-                        source_prefix: str,
-                        dest_bucket: str,
-                        dest_prefix: str,
-                        delete_removed: bool = False) -> Dict[str, Any]:
-        """
-        Sync objects between S3 locations.
-        
-        Args:
-            source_bucket: Source bucket
-            source_prefix: Source prefix
-            dest_bucket: Destination bucket
-            dest_prefix: Destination prefix
-            delete_removed: Whether to delete objects in dest not in source
-            
-        Returns:
-            Sync results
-        """
-        try:
-            # Get source objects
-            source_objects = self.list_objects(source_bucket, source_prefix)
-            source_keys = {obj['key'] for obj in source_objects}
-            
-            # Get destination objects
-            dest_objects = self.list_objects(dest_bucket, dest_prefix)
-            dest_keys = {obj['key'] for obj in dest_objects}
-            
-            # Calculate operations needed
-            to_copy = []
-            to_delete = []
-            
-            # Objects to copy (new or updated)
-            for src_obj in source_objects:
-                src_key = src_obj['key']
-                relative_key = src_key[len(source_prefix):].lstrip('/')
-                dest_key = os.path.join(dest_prefix, relative_key).replace('\\', '/')
-                
-                # Check if needs copying
-                needs_copy = True
-                for dest_obj in dest_objects:
-                    if dest_obj['key'] == dest_key:
-                        # Compare ETags to see if content changed
-                        if dest_obj['etag'] == src_obj['etag']:
-                            needs_copy = False
-                        break
-                
-                if needs_copy:
-                    to_copy.append({
-                        'source_key': src_key,
-                        'dest_key': dest_key,
-                        'size': src_obj['size']
-                    })
-            
-            # Objects to delete (if delete_removed is True)
-            if delete_removed:
-                for dest_obj in dest_objects:
-                    dest_key = dest_obj['key']
-                    relative_key = dest_key[len(dest_prefix):].lstrip('/')
-                    src_key = os.path.join(source_prefix, relative_key).replace('\\', '/')
-                    
-                    if src_key not in source_keys:
-                        to_delete.append(dest_key)
-            
-            # Execute sync operations
-            copied_count = 0
-            copy_errors = []
-            
-            for copy_info in to_copy:
-                try:
-                    self.copy_object(
-                        source_bucket, copy_info['source_key'],
-                        dest_bucket, copy_info['dest_key']
-                    )
-                    copied_count += 1
-                except Exception as e:
-                    logger.error(f"Failed to copy {copy_info['source_key']}: {e}")
-                    copy_errors.append(str(e))
-            
-            deleted_count = 0
-            if to_delete:
-                delete_result = self.delete_objects(dest_bucket, to_delete)
-                deleted_count = delete_result['deleted_count']
-            
-            return {
-                'source_objects': len(source_objects),
-                'dest_objects': len(dest_objects),
-                'copied': copied_count,
-                'deleted': deleted_count,
-                'copy_errors': copy_errors,
-                'to_copy_count': len(to_copy),
-                'to_delete_count': len(to_delete)
-            }
-            
+                logger.error(f"Error getting object metadata: {e}")
+                raise
         except Exception as e:
-            logger.error(f"Failed to sync directories: {e}")
+            logger.error(f"Unexpected error getting object metadata: {e}")
             raise
-    
-    def test_connection(self, bucket_name: str = None) -> bool:
-        """
-        Test S3 connection.
-        
-        Args:
-            bucket_name: Optional bucket name to test specific bucket access
-            
-        Returns:
-            True if connection successful, False otherwise
-        """
-        try:
-            if bucket_name:
-                # Test specific bucket access
-                response = self.s3_client.head_bucket(Bucket=bucket_name)
-                logger.info(f"S3 connection test successful for bucket: {bucket_name}")
-            else:
-                # Test general S3 access by listing buckets
-                response = self.s3_client.list_buckets()
-                bucket_count = len(response.get('Buckets', []))
-                logger.info(f"S3 connection test successful - {bucket_count} buckets accessible")
-            
-            return True
-            
-        except ClientError as e:
-            error_code = e.response['Error']['Code']
-            if error_code == '403':
-                logger.error("S3 connection test failed: Access denied")
-            elif error_code == '404':
-                logger.error(f"S3 connection test failed: Bucket not found - {bucket_name}")
-            else:
-                logger.error(f"S3 connection test failed: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"S3 connection test failed: {e}")
-            return False
-    
-    def _create_progress_callback(self, filename: str, operation: str, total_size: int = None):
-        """Create a progress callback for file transfers."""
-        class ProgressTracker:
-            def __init__(self):
-                self.bytes_transferred = 0
-                self.last_reported = 0
-            
-            def __call__(self, bytes_amount):
-                self.bytes_transferred += bytes_amount
-                
-                # Report progress every 10MB
-                if self.bytes_transferred - self.last_reported > 10 * 1024 * 1024:
-                    if total_size:
-                        percentage = (self.bytes_transferred / total_size) * 100
-                        logger.debug(f"{operation} progress for {filename}: "
-                                   f"{percentage:.1f}% ({self.bytes_transferred:,}/{total_size:,} bytes)")
-                    else:
-                        logger.debug(f"{operation} progress for {filename}: "
-                                   f"{self.bytes_transferred:,} bytes")
-                    self.last_reported = self.bytes_transferred
-        
-        return ProgressTracker()
-    
-    def _verify_file_checksum(self, file_path: str, expected_etag: str) -> bool:
-        """Verify file checksum against S3 ETag."""
-        try:
-            # For files uploaded as single part, ETag is MD5
-            # For multipart uploads, ETag has a different format
-            if '-' in expected_etag:
-                # Multipart upload - skip verification
-                logger.debug("Skipping checksum verification for multipart upload")
-                return True
-            
-            # Calculate MD5 of local file
-            md5_hash = hashlib.md5()
-            with open(file_path, 'rb') as f:
-                for chunk in iter(lambda: f.read(8192), b''):
-                    md5_hash.update(chunk)
-            
-            calculated_md5 = md5_hash.hexdigest()
-            
-            if calculated_md5 == expected_etag:
-                logger.debug(f"Checksum verified for {file_path}")
-                return True
-            else:
-                logger.error(f"Checksum mismatch for {file_path}: "
-                           f"expected {expected_etag}, got {calculated_md5}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error verifying checksum: {e}")
-            return False
-
-# Global S3 connector instance
-s3_connector = S3Connector()

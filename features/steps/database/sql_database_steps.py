@@ -3,30 +3,69 @@
 from behave import given, when, then, step
 import time
 import pandas as pd
+import os
 from typing import Dict, List, Any
-from steps.database.base_database_steps import BaseDatabaseSteps
 
-# Import your existing modules (adjust as needed)
+# Import your existing modules
 try:
-    from utils.logger import logger
-    from db.database_connector import db_connector
+    from db.database_manager import DatabaseManager
+    from utils.logger import logger, db_logger
 except ImportError as e:
     print(f"Import warning: {e}")
     print("Please adjust imports to match your existing module structure")
 
 
-class SQLDatabaseSteps(BaseDatabaseSteps):
+class SQLDatabaseSteps:
     """SQL-specific database step definitions."""
     
     def __init__(self, context):
-        super().__init__(context)
+        self.context = context
         self.validation_results = {}
         self.comparison_result = {}
         self.quality_check_results = {}
         self.schema_comparison = {}
+        
+        # Initialize database manager if not exists
+        if not hasattr(context, 'db_manager'):
+            context.db_manager = DatabaseManager()
+        
+        self.db_manager = context.db_manager
+    
+    def execute_sql_query(self, query: str, env: str, db_type: str) -> List[Dict]:
+        """Execute SQL query using database manager."""
+        return self.db_manager.execute_sql_query(query, env, db_type)
+    
+    def get_table_exists_query(self, table_name: str, db_type: str) -> str:
+        """Get appropriate table existence query for database type."""
+        if db_type.upper() == 'ORACLE':
+            return f"SELECT COUNT(*) as table_count FROM user_tables WHERE table_name = UPPER('{table_name}')"
+        elif db_type.upper() in ['POSTGRES', 'POSTGRESQL']:
+            return f"SELECT COUNT(*) as table_count FROM information_schema.tables WHERE table_name = '{table_name.lower()}'"
+        else:
+            raise ValueError(f"Unsupported database type for table existence check: {db_type}")
+    
+    def get_schema_query(self, table_name: str, db_type: str) -> str:
+        """Get appropriate schema query for database type."""
+        if db_type.upper() == 'ORACLE':
+            return f"""
+                SELECT column_name, data_type, data_length, nullable, column_id
+                FROM user_tab_columns 
+                WHERE table_name = UPPER('{table_name}')
+                ORDER BY column_id
+            """
+        elif db_type.upper() in ['POSTGRES', 'POSTGRESQL']:
+            return f"""
+                SELECT column_name, data_type, character_maximum_length as data_length, 
+                       is_nullable as nullable, ordinal_position as column_id
+                FROM information_schema.columns
+                WHERE table_name = '{table_name.lower()}'
+                ORDER BY ordinal_position
+            """
+        else:
+            raise ValueError(f"Unsupported database type for schema query: {db_type}")
 
 
-# Step definitions for your data_validation.feature
+# Step definitions for data validation
 @given('I have a table "{table_name}" in "{env}" database')
 def step_verify_table_exists(context, table_name, env):
     """Verify that a table exists in the specified database."""
@@ -36,15 +75,10 @@ def step_verify_table_exists(context, table_name, env):
     # Get current database type from context
     db_type = getattr(context, 'current_db_type', 'ORACLE')
     
-    # Query to check if table exists (Oracle/PostgreSQL compatible)
-    if db_type.upper() == 'ORACLE':
-        query = f"SELECT COUNT(*) FROM user_tables WHERE table_name = UPPER('{table_name}')"
-    else:  # PostgreSQL
-        query = f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '{table_name.lower()}'"
-    
     try:
+        query = context.sql_steps.get_table_exists_query(table_name, db_type)
         results = context.sql_steps.execute_sql_query(query, env, db_type)
-        table_count = list(results[0].values())[0] if results else 0
+        table_count = results[0]['table_count'] if results else 0
         
         assert table_count > 0, f"Table '{table_name}' does not exist in {env} {db_type} database"
         logger.info(f"Table '{table_name}' exists in {env} database")
@@ -96,51 +130,62 @@ def step_validate_required_fields(context):
     validation_results = {}
     
     for field_name, rule in validation_rules.items():
-        if rule == 'NOT_NULL':
-            query = f"SELECT COUNT(*) FROM {table_name} WHERE {field_name} IS NULL"
-            results = context.sql_steps.execute_sql_query(query, env, db_type)
-            null_count = list(results[0].values())[0] if results else 0
+        try:
+            if rule == 'NOT_NULL':
+                query = f"SELECT COUNT(*) as null_count FROM {table_name} WHERE {field_name} IS NULL"
+                results = context.sql_steps.execute_sql_query(query, env, db_type)
+                null_count = results[0]['null_count'] if results else 0
+                validation_results[field_name] = {
+                    'rule': rule,
+                    'passed': null_count == 0,
+                    'details': f"Found {null_count} NULL values"
+                }
+                
+            elif rule == 'VALID_DATE':
+                if db_type.upper() == 'ORACLE':
+                    query = f"""
+                        SELECT COUNT(*) as invalid_count FROM {table_name} 
+                        WHERE {field_name} IS NOT NULL 
+                        AND NOT REGEXP_LIKE(TO_CHAR({field_name}, 'YYYY-MM-DD'), '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}$')
+                    """
+                else:  # PostgreSQL
+                    query = f"""
+                        SELECT COUNT(*) as invalid_count FROM {table_name} 
+                        WHERE {field_name} IS NOT NULL 
+                        AND {field_name}::text !~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}'
+                    """
+                
+                results = context.sql_steps.execute_sql_query(query, env, db_type)
+                invalid_count = results[0]['invalid_count'] if results else 0
+                validation_results[field_name] = {
+                    'rule': rule,
+                    'passed': invalid_count == 0,
+                    'details': f"Found {invalid_count} invalid date values"
+                }
+                
+            elif rule == 'POSITIVE_NUMBER':
+                query = f"SELECT COUNT(*) as invalid_count FROM {table_name} WHERE {field_name} <= 0"
+                results = context.sql_steps.execute_sql_query(query, env, db_type)
+                invalid_count = results[0]['invalid_count'] if results else 0
+                validation_results[field_name] = {
+                    'rule': rule,
+                    'passed': invalid_count == 0,
+                    'details': f"Found {invalid_count} non-positive values"
+                }
+                
+        except Exception as e:
+            db_logger.error(f"Validation failed for {field_name} with rule {rule}: {e}")
             validation_results[field_name] = {
                 'rule': rule,
-                'passed': null_count == 0,
-                'details': f"Found {null_count} NULL values"
-            }
-            
-        elif rule == 'VALID_DATE':
-            if db_type.upper() == 'ORACLE':
-                query = f"""
-                    SELECT COUNT(*) FROM {table_name} 
-                    WHERE {field_name} IS NOT NULL 
-                    AND NOT REGEXP_LIKE(TO_CHAR({field_name}, 'YYYY-MM-DD'), '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}$')
-                """
-            else:  # PostgreSQL
-                query = f"""
-                    SELECT COUNT(*) FROM {table_name} 
-                    WHERE {field_name} IS NOT NULL 
-                    AND {field_name}::text !~ '^[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}'
-                """
-            
-            results = context.sql_steps.execute_sql_query(query, env, db_type)
-            invalid_count = list(results[0].values())[0] if results else 0
-            validation_results[field_name] = {
-                'rule': rule,
-                'passed': invalid_count == 0,
-                'details': f"Found {invalid_count} invalid date values"
-            }
-            
-        elif rule == 'POSITIVE_NUMBER':
-            query = f"SELECT COUNT(*) FROM {table_name} WHERE {field_name} <= 0"
-            results = context.sql_steps.execute_sql_query(query, env, db_type)
-            invalid_count = list(results[0].values())[0] if results else 0
-            validation_results[field_name] = {
-                'rule': rule,
-                'passed': invalid_count == 0,
-                'details': f"Found {invalid_count} non-positive values"
+                'passed': False,
+                'details': f"Validation error: {str(e)}"
             }
     
     # Store validation results
     context.sql_steps.validation_results = validation_results
     context.validation_results = validation_results
+    
+    db_logger.info(f"Completed validation for {len(validation_rules)} fields")
 
 
 @then('all validation rules should pass')
@@ -177,37 +222,57 @@ def step_compare_data_between_environments(context, table_name):
     env1, env2 = context.comparison_envs
     db_type = getattr(context, 'current_db_type', 'ORACLE')
     
-    # Get data from both environments
-    query = f"SELECT * FROM {table_name} ORDER BY 1"
+    # Get record counts from both environments
+    count_query = f"SELECT COUNT(*) as record_count FROM {table_name}"
     
     try:
-        data1 = context.sql_steps.execute_sql_query(query, env1, db_type)
-        data2 = context.sql_steps.execute_sql_query(query, env2, db_type)
+        count1_results = context.sql_steps.execute_sql_query(count_query, env1, db_type)
+        count2_results = context.sql_steps.execute_sql_query(count_query, env2, db_type)
         
-        # Perform basic comparison
+        count1 = count1_results[0]['record_count'] if count1_results else 0
+        count2 = count2_results[0]['record_count'] if count2_results else 0
+        
+        # Get sample data for comparison (limit to reasonable size)
+        sample_query = f"SELECT * FROM {table_name} ORDER BY 1"
+        if db_type.upper() == 'ORACLE':
+            sample_query += " FETCH FIRST 1000 ROWS ONLY"
+        else:  # PostgreSQL
+            sample_query += " LIMIT 1000"
+        
+        data1 = context.sql_steps.execute_sql_query(sample_query, env1, db_type)
+        data2 = context.sql_steps.execute_sql_query(sample_query, env2, db_type)
+        
+        # Perform comparison
         comparison_result = {
             'table_name': table_name,
             'env1': env1,
             'env2': env2,
-            'env1_count': len(data1),
-            'env2_count': len(data2),
-            'matching_count': 0,
+            'env1_count': count1,
+            'env2_count': count2,
+            'sample_env1_count': len(data1),
+            'sample_env2_count': len(data2),
+            'matching_count': min(len(data1), len(data2)),
             'discrepancies': []
         }
         
-        # Simple comparison logic (can be enhanced)
-        if len(data1) == len(data2):
-            comparison_result['matching_count'] = len(data1)
-        else:
+        # Check for count differences
+        if count1 != count2:
             comparison_result['discrepancies'].append({
                 'type': 'count_mismatch',
-                'env1_count': len(data1),
-                'env2_count': len(data2)
+                'env1_count': count1,
+                'env2_count': count2,
+                'difference': abs(count1 - count2)
             })
+        
+        # Store results for comparison steps
+        context.db_manager.store_result('env1_data', data1)
+        context.db_manager.store_result('env2_data', data2)
         
         context.sql_steps.comparison_result = comparison_result
         context.comparison_result = comparison_result
-        logger.info(f"Data comparison completed for table {table_name}")
+        
+        db_logger.info(f"Data comparison completed for table {table_name}")
+        db_logger.info(f"  {env1}: {count1} records, {env2}: {count2} records")
         
     except Exception as e:
         logger.error(f"Data comparison failed: {e}")
@@ -226,11 +291,11 @@ def step_verify_data_matches_with_tolerance(context, tolerance_percent):
     env1_count = comparison_result.get('env1_count', 0)
     env2_count = comparison_result.get('env2_count', 0)
     total_records = max(env1_count, env2_count)
-    matching_records = comparison_result.get('matching_count', 0)
     
     if total_records == 0:
         match_percentage = 100.0
     else:
+        matching_records = min(env1_count, env2_count)
         match_percentage = (matching_records / total_records) * 100
     
     required_percentage = 100 - tolerance_percent
@@ -256,7 +321,6 @@ def step_log_discrepancies_to_file(context, filename):
         df = pd.DataFrame(discrepancies)
         
         # Save to CSV file in output directory
-        import os
         os.makedirs('output', exist_ok=True)
         output_path = f"output/{filename}"
         df.to_csv(output_path, index=False)
@@ -285,7 +349,7 @@ def step_execute_performance_test_query(context, query):
         context.last_performance_time = execution_time
         context.last_query_results = results
         
-        logger.info(f"Performance test query executed in {execution_time:.3f} seconds")
+        db_logger.info(f"Performance test query executed in {execution_time:.3f} seconds, returned {len(results)} rows")
         
     except Exception as e:
         logger.error(f"Performance test query failed: {e}")
@@ -311,7 +375,7 @@ def step_verify_execution_plan_uses_indexes(context):
     """Verify that the execution plan uses indexes efficiently."""
     # This is a placeholder implementation
     # In a real scenario, you'd capture and analyze the execution plan
-    logger.info("Execution plan verification - implementation depends on database specifics")
+    db_logger.info("Execution plan verification - implementation depends on database specifics")
     
     # You can implement actual execution plan analysis here
     # For Oracle: EXPLAIN PLAN FOR ... then SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY)
@@ -352,9 +416,9 @@ def step_run_data_quality_checks(context, table_name):
                 }
                 
             elif check_type == 'null_check':
-                query = f"SELECT COUNT(*) FROM {table_name} WHERE {column_name} IS NULL"
+                query = f"SELECT COUNT(*) as null_count FROM {table_name} WHERE {column_name} IS NULL"
                 results = context.sql_steps.execute_sql_query(query, env, db_type)
-                null_count = list(results[0].values())[0] if results else 0
+                null_count = results[0]['null_count'] if results else 0
                 quality_checks[f"{check_type}_{column_name}"] = {
                     'type': check_type,
                     'column': column_name,
@@ -366,19 +430,19 @@ def step_run_data_quality_checks(context, table_name):
             elif check_type == 'format_check' and expected_result == 'PHONE_FORMAT':
                 if db_type.upper() == 'ORACLE':
                     query = f"""
-                        SELECT COUNT(*) FROM {table_name} 
+                        SELECT COUNT(*) as invalid_count FROM {table_name} 
                         WHERE {column_name} IS NOT NULL 
                         AND NOT REGEXP_LIKE({column_name}, '^[+]?[0-9\\s\\-\\(\\)]+$')
                     """
                 else:  # PostgreSQL
                     query = f"""
-                        SELECT COUNT(*) FROM {table_name} 
+                        SELECT COUNT(*) as invalid_count FROM {table_name} 
                         WHERE {column_name} IS NOT NULL 
                         AND {column_name} !~ '^[+]?[0-9\\s\\-\\(\\)]+$'
                     """
                 
                 results = context.sql_steps.execute_sql_query(query, env, db_type)
-                invalid_count = list(results[0].values())[0] if results else 0
+                invalid_count = results[0]['invalid_count'] if results else 0
                 quality_checks[f"{check_type}_{column_name}"] = {
                     'type': check_type,
                     'column': column_name,
@@ -389,12 +453,12 @@ def step_run_data_quality_checks(context, table_name):
                 
             elif check_type == 'range_check' and expected_result == '18_TO_120':
                 query = f"""
-                    SELECT COUNT(*) FROM {table_name} 
+                    SELECT COUNT(*) as out_of_range_count FROM {table_name} 
                     WHERE {column_name} IS NOT NULL 
                     AND ({column_name} < 18 OR {column_name} > 120)
                 """
                 results = context.sql_steps.execute_sql_query(query, env, db_type)
-                out_of_range_count = list(results[0].values())[0] if results else 0
+                out_of_range_count = results[0]['out_of_range_count'] if results else 0
                 quality_checks[f"{check_type}_{column_name}"] = {
                     'type': check_type,
                     'column': column_name,
@@ -404,7 +468,7 @@ def step_run_data_quality_checks(context, table_name):
                 }
                 
         except Exception as e:
-            logger.error(f"Quality check failed for {check_type}_{column_name}: {e}")
+            db_logger.error(f"Quality check failed for {check_type}_{column_name}: {e}")
             quality_checks[f"{check_type}_{column_name}"] = {
                 'type': check_type,
                 'column': column_name,
@@ -415,6 +479,8 @@ def step_run_data_quality_checks(context, table_name):
     
     context.sql_steps.quality_check_results = quality_checks
     context.quality_check_results = quality_checks
+    
+    db_logger.info(f"Completed {len(quality_checks)} data quality checks on table {table_name}")
 
 
 @then('all data quality checks should pass')
@@ -464,7 +530,6 @@ def step_generate_data_quality_report(context):
     df = pd.DataFrame(report_data)
     timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
     
-    import os
     os.makedirs('output', exist_ok=True)
     report_filename = f"output/data_quality_report_{timestamp}.csv"
     df.to_csv(report_filename, index=False)
@@ -484,7 +549,6 @@ def step_compare_schema_between_environments(context, table_name):
     env1, env2 = context.comparison_envs
     db_type = getattr(context, 'current_db_type', 'ORACLE')
     
-    # Basic schema comparison - can be enhanced
     schema_comparison = {
         'table_name': table_name,
         'environments': [env1, env2],
@@ -494,26 +558,12 @@ def step_compare_schema_between_environments(context, table_name):
     }
     
     try:
-        # Get column information from both environments
-        if db_type.upper() == 'ORACLE':
-            schema_query = f"""
-                SELECT column_name, data_type, data_length, nullable 
-                FROM user_tab_columns 
-                WHERE table_name = UPPER('{table_name}')
-                ORDER BY column_id
-            """
-        else:  # PostgreSQL
-            schema_query = f"""
-                SELECT column_name, data_type, character_maximum_length as data_length, is_nullable as nullable
-                FROM information_schema.columns
-                WHERE table_name = '{table_name.lower()}'
-                ORDER BY ordinal_position
-            """
+        schema_query = context.sql_steps.get_schema_query(table_name, db_type)
         
         schema1 = context.sql_steps.execute_sql_query(schema_query, env1, db_type)
         schema2 = context.sql_steps.execute_sql_query(schema_query, env2, db_type)
         
-        # Simple comparison - can be enhanced for detailed analysis
+        # Compare column counts
         if len(schema1) != len(schema2):
             schema_comparison['column_differences'].append({
                 'type': 'column_count_mismatch',
@@ -521,9 +571,38 @@ def step_compare_schema_between_environments(context, table_name):
                 'env2_count': len(schema2)
             })
         
+        # Compare column details
+        schema1_dict = {col['column_name']: col for col in schema1}
+        schema2_dict = {col['column_name']: col for col in schema2}
+        
+        all_columns = set(schema1_dict.keys()) | set(schema2_dict.keys())
+        
+        for col_name in all_columns:
+            if col_name in schema1_dict and col_name in schema2_dict:
+                col1, col2 = schema1_dict[col_name], schema2_dict[col_name]
+                if col1['data_type'] != col2['data_type']:
+                    schema_comparison['column_differences'].append({
+                        'type': 'data_type_mismatch',
+                        'column': col_name,
+                        'env1_type': col1['data_type'],
+                        'env2_type': col2['data_type']
+                    })
+            elif col_name in schema1_dict:
+                schema_comparison['column_differences'].append({
+                    'type': 'column_missing_in_env2',
+                    'column': col_name
+                })
+            else:
+                schema_comparison['column_differences'].append({
+                    'type': 'column_missing_in_env1',
+                    'column': col_name
+                })
+        
         context.sql_steps.schema_comparison = schema_comparison
         context.schema_comparison = schema_comparison
-        logger.info(f"Schema comparison completed for table {table_name}")
+        
+        db_logger.info(f"Schema comparison completed for table {table_name}")
+        db_logger.info(f"Found {len(schema_comparison['column_differences'])} column differences")
         
     except Exception as e:
         logger.error(f"Schema comparison failed: {e}")
@@ -540,8 +619,9 @@ def step_verify_table_structure_matches(context):
     
     structure_differences = schema_comparison.get('column_differences', [])
     
-    assert len(structure_differences) == 0, \
-        f"Table structure differences found: {structure_differences}"
+    if structure_differences:
+        diff_details = "\n".join([str(diff) for diff in structure_differences])
+        raise AssertionError(f"Table structure differences found:\n{diff_details}")
     
     logger.info("Table structures match exactly")
 
@@ -556,8 +636,9 @@ def step_verify_indexes_consistent(context):
     
     index_differences = schema_comparison.get('index_differences', [])
     
-    assert len(index_differences) == 0, \
-        f"Index differences found: {index_differences}"
+    if index_differences:
+        diff_details = "\n".join([str(diff) for diff in index_differences])
+        raise AssertionError(f"Index differences found:\n{diff_details}")
     
     logger.info("Indexes are consistent between environments")
 
@@ -572,7 +653,8 @@ def step_verify_constraints_identical(context):
     
     constraint_differences = schema_comparison.get('constraint_differences', [])
     
-    assert len(constraint_differences) == 0, \
-        f"Constraint differences found: {constraint_differences}"
+    if constraint_differences:
+        diff_details = "\n".join([str(diff) for diff in constraint_differences])
+        raise AssertionError(f"Constraint differences found:\n{diff_details}")
     
     logger.info("Constraints are identical between environments")

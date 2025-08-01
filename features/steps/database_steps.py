@@ -8,7 +8,7 @@ from datetime import datetime
 import logging
 
 from db.database_connector import db_connector
-from db.data_comparator import DataComparator
+from utils.data_comparator import DataComparator
 from utils.custom_exceptions import (
     DatabaseConnectionError, 
     QueryExecutionError, 

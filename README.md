@@ -1,35 +1,38 @@
-# Python Automation Framework with Behave BDD
-
+Python Automation Framework with Behave BDD
 A comprehensive test automation framework supporting SQL databases, NoSQL MongoDB, REST APIs, AWS services, and message queuing with BDD capabilities using Behave.
 
-## 🚀 Features
+📋 Table of Contents
+Quick Start
 
-- 🗄️ **Multi-Database Support**: Oracle, PostgreSQL, and MongoDB with cross-database validation
-- 🌐 **REST API Testing**: Comprehensive API testing with schema validation
-- ☁️ **AWS Integration**: S3, SQS, and AWS-SQL integration testing
-- 📨 **Message Queue**: Support for multiple MQ systems (RabbitMQ, IBM MQ)
-- 🥒 **BDD Framework**: Behave-based testing with business-readable scenarios
-- 📊 **Advanced Reporting**: HTML, JUnit XML, and Allure reporting
-- 🔄 **CI/CD Ready**: Jenkins pipeline with Docker support
-- 📝 **Centralized Logging**: Component-based logging system
-- 🏷️ **Tag-Based Execution**: Flexible test execution strategies
+Project Structure
 
-## 📋 Table of Contents
+Git Ignore
 
-- [Quick Start](#quick-start)
-- [Project Structure](#project-structure)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Running Tests](#running-tests)
-- [Tag-Based Testing](#tag-based-testing)
-- [Component Testing](#component-testing)
-- [CI/CD Integration](#cicd-integration)
-- [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
+Features
 
-## Quick Start
+Prerequisites
 
-```bash
+Installation
+
+Configuration
+
+Running Tests
+
+Tag-Based Testing
+
+Component Testing
+
+CI/CD Integration
+
+Troubleshooting
+
+Contributing
+
+License
+
+🚀 Quick Start
+Get up and running with the framework in a few simple steps.
+
 # Clone the repository
 git clone <repository-url>
 cd automation-framework
@@ -38,7 +41,7 @@ cd automation-framework
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-# Install dependencies
+# Install dependencies from the requirements.txt file
 pip install -r requirements.txt
 
 # Setup configuration
@@ -50,83 +53,264 @@ behave
 
 # Run smoke tests only
 behave --tags=@smoke
-```
 
-## Project Structure
 
-```
-automation-framework/
-├── api/                # API client implementations
-│   ├── rest_client.py  # REST API client with retry logic
-│   └── json_validator.py # JSON schema validation
-├── aws/                # AWS service connectors
-│   ├── s3_connector.py # S3 operations
-│   ├── sqs_connector.py # SQS messaging
-│   └── sql_integration.py # AWS-SQL integration
-├── config/             # Configuration files
-│   ├── config.ini      # Database/service configurations
-│   ├── database_config.py # Database configuration loader
-│   └── environments.yaml # Environment-specific settings
-├── data/               # Test data
-│   ├── input/          # Input test files
-│   └── schemas/        # JSON validation schemas
-├── db/                 # Database connectors
-│   ├── base_connector.py # Base database interface
-│   ├── database_connector.py # SQL database operations
-│   └── mongodb_connector.py # MongoDB operations
-├── features/           # BDD feature files
-│   ├── api/           # API test scenarios
-│   ├── aws/           # AWS service scenarios
-│   ├── database/      # Database test scenarios
-│   │   ├── sql/       # SQL-specific tests
-│   │   ├── nosql/     # MongoDB tests
-│   │   └── cross_database/ # Cross-DB validation
-│   ├── mq/            # Message queue scenarios
-│   └── steps/         # Step definitions
-├── logs/              # Application logs
-├── mq/                # Message queue implementations
-├── output/            # Test reports and exports
-├── scripts/           # Utility scripts
-├── tests/             # Unit tests
-└── utils/             # Common utilities
-```
+🗂️.
+├── .env
+├── .env.template
+├── .gitignore
+├── .vscode
+│   └── settings.json
+├── Dockerfile
+├── Jenkinsfile
+├── api
+│   ├── __init__.py
+│   ├── json_validator.py
+│   └── rest_client.py
+├── aws
+│   ├── __init__.py
+│   ├── s3_connector.py
+│   ├── sql_integration.py
+│   └── sqs_connector.py
+├── behave.ini
+├── config
+│   ├── config.ini
+│   └── environments.yaml
+├── data
+│   ├── input
+│   │   ├── bulk_test_data.json
+│   │   ├── customer.json
+│   │   ├── multi_line_test.txt
+│   │   ├── test_data.txt
+│   │   └── test_message.txt
+│   └── schemas
+│       ├── api_schema.json
+│       └── customer_schema.json
+├── db
+│   ├── __init__.py
+│   ├── base_connector.py
+│   ├── database_connector.py
+│   ├── database_manager.py
+│   └── mongodb_connector.py
+├── features
+│   ├── api
+│   │   └── rest_api.feature
+│   ├── aws
+│   │   └── aws_integration.feature
+│   ├── database
+│   │   ├── cross_database
+│   │   │   └── data_sync_validation.feature
+│   │   ├── data_comparison.feature
+│   │   ├── nosql
+│   │   │   ├── mongodb_connection.feature
+│   │   │   ├── mongodb_crud.feature
+│   │   │   └── mongodb_operations.feature
+│   │   └── sql
+│   │       ├── basic_validation.feature
+│   │       ├── config_basedquery.feature
+│   │       └── data_validation.feature
+│   ├── environment.py
+│   ├── mq
+│   │   └── message_queue.feature
+│   └── steps
+│       ├── __init__.py
+│       ├── api_steps.py
+│       ├── aws_steps.py
+│       ├── database
+│       │   ├── base_database_steps.py
+│       │   ├── cross_database_steps.py
+│       │   ├── enhanced_data_compare_steps.py.py
+│       │   ├── mongodb_steps.py
+│       │   ├── query_database_steps.py
+│       │   └── sql_database_steps.py
+│       ├── database_steps.py
+│       └── mq_steps.py
+├── framework_analysis.sh
+├── framework_analysis.txt
+├── generate_requirements.py
+├── logs
+│   ├── api
+│   │   └── .gitkeep
+│   ├── application
+│   │   └── .gitkeep
+│   ├── database
+│   │   └── .gitkeep
+│   ├── mq
+│   │   └── .gitkeep
+│   └── test_execution
+│       └── .gitkeep
+├── mq
+│   ├── __init__.py
+│   └── mq_producer.py
+├── output
+│   ├── exports
+│   │   └── .gitkeep
+│   ├── junit
+│   │   └── .gitkeep
+│   └── reports
+│       └── .gitkeep
+├── path
+│   └── to
+├── project_structure.txt
+├── requirements.txt
+├── scripts
+│   ├── __init__.py
+│   └── run.py
+├── tests
+│   ├── __init__.py
+│   └── unit
+│       ├── .gitkeep
+│       ├── test_data_comparator.py
+│       ├── test_data_validator.py
+│       ├── test_export_utils.py
+│       ├── test_json_validator.py
+│       └── test_query_loader.py
+├── tox.ini
+└── utils
+    ├── __init__.py
+    ├── config_loader.py
+    ├── custom_exceptions.py
+    ├── data_cleaner.py
+    ├── data_comparator.py
+    ├── data_validator.py
+    ├── export_utils.py
+    ├── logger.py
+    └── query_loader.py
 
-## Installation
+36 directories, 85 files
 
-### Prerequisites
 
-- Python 3.8 or higher
-- Database access (Oracle/PostgreSQL/MongoDB)
-- AWS account (for AWS testing)
-- Message Queue server (RabbitMQ/IBM MQ)
+📝 Git Ignore (.gitignore)
+To keep the repository clean and avoid committing unnecessary files, the project uses the following .gitignore configuration.
 
-### Setup Steps
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-1. **Install Python dependencies:**
-```bash
-pip install -r requirements.txt
-```
+# Virtual environments
+venv/
+env/
+ENV/
 
-2. **Install additional tools (optional):**
-```bash
+# Environment variables
+.env
+
+# Logs
+logs/**/*.log
+
+# Output files
+output/**/*
+!output/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Behave
+reports/
+
+setup_framework.py
+generate_implementation.py
+MY_NEXT_STEPS.md
+mynotes.txt
+
+🌟 Features
+Multi-Database Support: Oracle, PostgreSQL, and MongoDB with cross-database validation.
+
+REST API Testing: Comprehensive API testing with schema validation.
+
+AWS Integration: S3, SQS, and AWS-SQL integration testing.
+
+Message Queue: Support for multiple MQ systems (RabbitMQ, IBM MQ).
+
+BDD Framework: Behave-based testing with business-readable scenarios.
+
+Advanced Reporting: HTML, JUnit XML, and Allure reporting.
+
+CI/CD Ready: Jenkins pipeline with Docker support.
+
+Centralized Logging: Component-based logging system.
+
+Tag-Based Execution: Flexible test execution strategies.
+
+⚙️ Prerequisites
+Before you begin, ensure you have the following installed:
+
+Python 3.8 or higher
+
+Database access (Oracle/PostgreSQL/MongoDB)
+
+AWS account (for AWS testing)
+
+Message Queue server (RabbitMQ/IBM MQ)
+
+📦 Installation
+Clone the repository.
+
+Set up a virtual environment.
+
+Install Python dependencies using the requirements.txt file in this project. The required packages are:
+
+behave
+jsonschema
+pandas
+requests
+pymqi
+boto3
+SQLAlchemy
+pymongo
+PyYAML
+
+
+Optionally, install additional tools for code quality and performance testing.
+
 # For code quality
 pip install pylint black flake8
-
 # For performance testing
 pip install locust memory-profiler
-```
 
-3. **Setup pre-commit hooks:**
-```bash
+
+Set up pre-commit hooks.
+
 pip install pre-commit
 pre-commit install
-```
 
-## Configuration
 
-### Environment Variables (.env)
+🛠️ Configuration
+The framework uses environment variables and .ini files for configuration.
 
-```bash
+Environment Variables (.env)
+Copy the .env.template file to .env and fill in your credentials.
+
 # Database Credentials
 DEV_ORACLE_PWD=your_oracle_password
 DEV_POSTGRES_PWD=your_postgres_password
@@ -146,11 +330,11 @@ MQ_HOST=localhost
 MQ_PORT=5672
 MQ_USERNAME=guest
 MQ_PASSWORD=guest
-```
 
-### Database Configuration (config/config.ini)
 
-```ini
+Database Configuration (config/config.ini)
+This file holds specific connection details for each database environment.
+
 [DEV_ORACLE]
 host = oracle-dev.example.com
 port = 1521
@@ -169,13 +353,11 @@ port = 27017
 database = dev_db
 username = dev_user
 auth_source = admin
-```
 
-## Running Tests
 
-### Using Behave
+▶️ Running Tests
+Using Behave
 
-```bash
 # Run all tests
 behave
 
@@ -188,11 +370,10 @@ behave features/api/rest_api.feature
 
 # Dry run (syntax check)
 behave --dry-run
-```
 
-### Using Makefile
 
-```bash
+Using Makefile
+
 # Setup environment
 make setup
 
@@ -209,51 +390,30 @@ make clean
 
 # Generate reports
 make report
-```
 
-### Using pytest (for unit tests)
 
-```bash
+Using pytest (for unit tests)
+
 # Run unit tests
 pytest tests/
 
 # With coverage
 pytest --cov=utils --cov=db --cov=api tests/
-```
 
-## Tag-Based Testing
 
-### Available Tags
+🏷️ Tag-Based Testing
+Available Tags
 
-#### Test Types
-- `@smoke` - Quick validation tests
-- `@regression` - Comprehensive test suite
-- `@integration` - Integration tests
-- `@e2e` - End-to-end workflows
-- `@performance` - Performance tests
+Test Types: @smoke, @regression, @integration, @e2e, @performance
 
-#### Components
-- `@api` - REST API tests
-- `@database` - SQL database tests
-- `@mongodb` - MongoDB tests
-- `@aws` - AWS service tests
-- `@mq` - Message queue tests
+Components: @api, @database, @mongodb, @aws, @mq
 
-#### Environments
-- `@dev` - Development environment
-- `@qa` - QA environment
-- `@staging` - Staging environment
-- `@prod` - Production environment
+Environments: @dev, @qa, @staging, @prod
 
-#### Operations
-- `@crud` - Create, Read, Update, Delete
-- `@query` - Query operations
-- `@validation` - Data validation
-- `@auth` - Authentication tests
+Operations: @crud, @query, @validation, @auth
 
-### Tag Usage Examples
+Tag Usage Examples
 
-```bash
 # Single tag
 behave --tags=@smoke
 
@@ -268,103 +428,42 @@ behave --tags="not @slow"
 
 # Complex combinations
 behave --tags="(@smoke or @regression) and @api and not @prod"
-```
 
-## Component Testing
 
-### API Testing
+🧩 Component Testing
+API Testing
 
-```bash
 # Test REST API endpoints
 behave features/api/ --tags=@api
 
 # Test specific endpoint
 python scripts/run.py test-api --endpoint /customers --method GET
 
-# API performance test
-behave features/api/ --tags="@api and @performance"
-```
 
-### Database Testing
+Database Testing
 
-```bash
 # SQL Database tests
 behave features/database/sql/ --tags=@database
 
 # MongoDB tests
 behave features/database/nosql/ --tags=@mongodb
 
-# Cross-database validation
-behave features/database/cross_database/ --tags=@validation
-```
 
-### AWS Testing
+AWS Testing
 
-```bash
 # S3 operations
 behave features/aws/ --tags="@aws and @s3"
 
-# SQS messaging
-behave features/aws/ --tags="@aws and @sqs"
 
-# Full AWS integration
-behave features/aws/ --tags=@aws
-```
+Message Queue Testing
 
-### Message Queue Testing
-
-```bash
 # MQ connectivity
 behave features/mq/ --tags="@mq and @smoke"
 
-# Message processing
-behave features/mq/ --tags="@mq and @integration"
-```
 
-## Advanced Features
+🔄 CI/CD Integration
+Jenkins Pipeline
 
-### Data Comparison
-
-```bash
-# Compare data between environments
-python scripts/run.py compare \
-  --source-env DEV \
-  --target-env QA \
-  --table customers
-
-# MongoDB comparison
-python scripts/run.py compare-mongo \
-  --source-env DEV \
-  --target-env QA \
-  --collection users
-```
-
-### Parallel Execution
-
-```bash
-# Run tests in parallel (requires pytest-xdist)
-pytest -n 4 tests/
-
-# Parallel behave execution
-behave --parallel 2 --parallel-element scenario
-```
-
-### Custom Reports
-
-```bash
-# Generate Allure report
-behave -f allure_behave.formatter:AllureFormatter -o output/allure-results
-allure generate output/allure-results -o output/allure-report
-
-# Generate HTML report
-behave -f html -o output/report.html
-```
-
-## CI/CD Integration
-
-### Jenkins Pipeline
-
-```groovy
 pipeline {
     agent any
     
@@ -415,148 +514,41 @@ pipeline {
         }
     }
 }
-```
 
-### Docker Support
 
-```dockerfile
+Docker Support
+
 FROM python:3.9-slim
 
 WORKDIR /app
-
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
 COPY . .
 
 # Run tests
 CMD ["behave", "--tags=@smoke"]
-```
 
-## Troubleshooting
 
-### Common Issues
+⚠️ Troubleshooting
+Common Issues
 
-#### Database Connection Issues
-```bash
-# Test connectivity
-python -c "from db.database_connector import db_connector; print(db_connector.test_connection('DEV', 'ORACLE'))"
+Database Connection Issues: Use the provided commands to test connectivity and check your configuration.
 
-# Check configuration
-python -c "from utils.config_loader import config_loader; print(config_loader.get_database_config('DEV', 'ORACLE'))"
-```
+Import Errors: Verify your Python path.
 
-#### Import Errors
-```bash
-# Verify Python path
-python -c "import sys; print('\n'.join(sys.path))"
+AWS Authentication: Use the aws sts get-caller-identity command to confirm your credentials.
 
-# Test imports
-python -c "import api.rest_client; print('API OK')"
-python -c "import db.mongodb_connector; print('MongoDB OK')"
-```
+🤝 Contributing
+For information on how to contribute to this project, including coding standards, commit messages, and the pull request process, please refer to the provided details.
 
-#### AWS Authentication
-```bash
-# Check AWS credentials
-aws sts get-caller-identity
-
-# Test AWS connection
-python -c "from aws.s3_connector import s3_connector; print(s3_connector.test_connection())"
-```
-
-### Debug Mode
-
-```bash
-# Enable debug logging
-export LOG_LEVEL=DEBUG
-behave --tags=@smoke
-
-# Verbose output
-behave -v --tags=@api
-
-# Stop on first failure
-behave -x --tags=@regression
-```
-
-## Performance Optimization
-
-### Test Execution Speed
-
-```bash
-# Run only fast tests
-behave --tags="@fast"
-
-# Skip slow tests
-behave --tags="not @slow"
-
-# Parallel execution
-behave --parallel 2 --parallel-element feature
-```
-
-### Database Query Optimization
-
-```python
-# Use connection pooling
-db_connector.enable_pooling(min_size=2, max_size=10)
-
-# Batch operations
-db_connector.batch_insert(data, batch_size=1000)
-```
-
-## Best Practices
-
-1. **Tag Strategy**
-   - Use multiple tags for flexibility
-   - Keep tags consistent and documented
-   - Review and clean up unused tags regularly
-
-2. **Test Data Management**
-   - Use fixtures for test data setup/teardown
-   - Keep test data in version control
-   - Use data factories for dynamic data
-
-3. **Code Quality**
-   - Run linters before committing
-   - Maintain test coverage above 80%
-   - Follow PEP 8 style guide
-
-4. **Performance**
-   - Use connection pooling
-   - Implement proper cleanup in teardown
-   - Optimize database queries
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-### Coding Standards
-
-- Follow PEP 8
-- Write descriptive commit messages
-- Add tests for new features
-- Update documentation
-- Add appropriate tags to scenarios
-
-## License
-
+📜 License
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## Support
+📞 Support
+For issues and questions, please:
 
-For issues and questions:
-- Create an issue in the repository
-- Check the [Wiki](wiki-link) for detailed documentation
-- Contact the team at automation-team@example.com
+Create an issue in the repository.
 
-## Acknowledgments
+Check the Wiki for detailed documentation.
 
-- Behave BDD Framework
-- AWS SDK for Python (Boto3)
-- MongoDB Python Driver
-- PostgreSQL psycopg2
-- Oracle cx_Oracle
+Contact the team at automation-team@example.com.

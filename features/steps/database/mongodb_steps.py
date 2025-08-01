@@ -2,98 +2,148 @@
 
 from behave import given, when, then
 import time
+import json
 from typing import Dict, List, Any
-from steps.database.base_database_steps import BaseDatabaseSteps
+from bson import ObjectId
 
-# Import your existing modules (adjust as needed)
+# Import your existing modules
 try:
+    from db.database_manager import DatabaseManager
     from db.mongodb_connector import mongodb_connector
-    from utils.logger import logger
+    from utils.logger import logger, db_logger
 except ImportError as e:
     print(f"Import warning: {e}")
     print("Please adjust imports to match your existing module structure")
 
 
-class MongoDBSteps(BaseDatabaseSteps):
+class MongoDBSteps:
     """MongoDB-specific database step definitions."""
     
     def __init__(self, context):
-        super().__init__(context)
+        self.context = context
         self.test_documents = []  # Track test documents for cleanup
+        
+        # Initialize database manager if not exists
+        if not hasattr(context, 'db_manager'):
+            context.db_manager = DatabaseManager()
     
     def execute_mongodb_count(self, collection: str, env: str, query: Dict = None) -> int:
         """Count documents in MongoDB collection."""
-        connection = self.get_connection(env, 'MONGODB')
-        db = connection[mongodb_connector.get_database_name(env)]
-        
-        start_time = time.time()
-        if query:
-            count = db[collection].count_documents(query)
-        else:
-            count = db[collection].estimated_document_count()
-        execution_time = time.time() - start_time
-        
-        logger.info(f"MongoDB count executed in {execution_time:.2f} seconds: {collection}")
-        return count
+        try:
+            count = mongodb_connector.count_documents(
+                environment=env,
+                collection_name=collection,
+                query=query or {}
+            )
+            db_logger.info(f"MongoDB count executed: {collection} = {count}")
+            return count
+        except Exception as e:
+            db_logger.error(f"MongoDB count failed: {e}")
+            raise
     
     def execute_mongodb_find(self, collection: str, env: str, query: Dict = None, fields: List[str] = None) -> List[Dict]:
         """Find documents in MongoDB collection."""
-        connection = self.get_connection(env, 'MONGODB')
-        db = connection[mongodb_connector.get_database_name(env)]
-        
-        start_time = time.time()
-        
-        projection = None
-        if fields:
-            projection = {field: 1 for field in fields}
-            projection['_id'] = 0  # Exclude _id unless specifically requested
-        
-        if query:
-            cursor = db[collection].find(query, projection)
-        else:
-            cursor = db[collection].find({}, projection)
-        
-        results = list(cursor)
-        execution_time = time.time() - start_time
-        
-        logger.info(f"MongoDB find executed in {execution_time:.2f} seconds: {collection}")
-        return results
+        try:
+            projection = None
+            if fields:
+                projection = {field: 1 for field in fields}
+                projection['_id'] = 0  # Exclude _id unless specifically requested
+            
+            results = mongodb_connector.find_documents(
+                environment=env,
+                collection_name=collection,
+                query=query or {},
+                projection=projection
+            )
+            
+            db_logger.info(f"MongoDB find executed: {collection} returned {len(results)} documents")
+            return results
+        except Exception as e:
+            db_logger.error(f"MongoDB find failed: {e}")
+            raise
     
     def insert_test_document(self, collection: str, env: str, document: Dict) -> str:
         """Insert a test document and track it for cleanup."""
-        connection = self.get_connection(env, 'MONGODB')
-        db = connection[mongodb_connector.get_database_name(env)]
-        
-        # Add a test marker to identify test documents
-        document['_test_marker'] = True
-        document['_test_timestamp'] = time.time()
-        
-        result = db[collection].insert_one(document)
-        doc_id = str(result.inserted_id)
-        
-        # Track for cleanup
-        self.test_documents.append({
-            'collection': collection,
-            'env': env,
-            'doc_id': result.inserted_id
-        })
-        
-        logger.info(f"Inserted test document in {collection}: {doc_id}")
-        return doc_id
+        try:
+            # Add a test marker to identify test documents
+            document['_test_marker'] = True
+            document['_test_timestamp'] = time.time()
+            
+            result = mongodb_connector.insert_documents(
+                environment=env,
+                collection_name=collection,
+                documents=document
+            )
+            
+            doc_id = result['inserted_ids'][0]
+            
+            # Track for cleanup
+            self.test_documents.append({
+                'collection': collection,
+                'env': env,
+                'doc_id': ObjectId(doc_id)
+            })
+            
+            db_logger.info(f"Inserted test document in {collection}: {doc_id}")
+            return doc_id
+        except Exception as e:
+            db_logger.error(f"Insert test document failed: {e}")
+            raise
+    
+    def update_test_document(self, collection: str, env: str, doc_id: str, update_data: Dict) -> bool:
+        """Update a test document."""
+        try:
+            filter_query = {'_id': ObjectId(doc_id)}
+            update_query = {'$set': update_data}
+            
+            result = mongodb_connector.update_documents(
+                environment=env,
+                collection_name=collection,
+                filter_query=filter_query,
+                update_query=update_query
+            )
+            
+            success = result['modified_count'] > 0
+            if success:
+                db_logger.info(f"Updated test document {doc_id} in {collection}")
+            else:
+                db_logger.warning(f"No documents updated for ID {doc_id}")
+            
+            return success
+        except Exception as e:
+            db_logger.error(f"Update test document failed: {e}")
+            raise
     
     def cleanup_test_documents(self):
         """Clean up all test documents created during testing."""
         for doc_info in self.test_documents:
             try:
-                connection = self.get_connection(doc_info['env'], 'MONGODB')
-                db = connection[mongodb_connector.get_database_name(doc_info['env'])]
+                filter_query = {'_id': doc_info['doc_id']}
+                result = mongodb_connector.delete_documents(
+                    environment=doc_info['env'],
+                    collection_name=doc_info['collection'],
+                    filter_query=filter_query
+                )
                 
-                db[doc_info['collection']].delete_one({'_id': doc_info['doc_id']})
-                logger.debug(f"Cleaned up test document: {doc_info['doc_id']}")
+                if result['deleted_count'] > 0:
+                    db_logger.debug(f"Cleaned up test document: {doc_info['doc_id']}")
+                else:
+                    db_logger.warning(f"Test document not found for cleanup: {doc_info['doc_id']}")
+                    
             except Exception as e:
-                logger.warning(f"Error cleaning up test document {doc_info['doc_id']}: {e}")
+                db_logger.warning(f"Error cleaning up test document {doc_info['doc_id']}: {e}")
         
         self.test_documents.clear()
+    
+    def list_collections(self, env: str) -> List[str]:
+        """List all collections in MongoDB database."""
+        try:
+            collections = mongodb_connector.list_collection_names(environment=env)
+            db_logger.info(f"Found {len(collections)} collections in {env} database")
+            return collections
+        except Exception as e:
+            db_logger.error(f"List collections failed: {e}")
+            raise
 
 
 # MongoDB-specific step definitions
@@ -125,10 +175,7 @@ def step_count_mongodb_documents_with_query(context, collection, query_str):
     env = getattr(context, 'current_env', 'DEV')
     
     try:
-        # Parse query string (basic JSON parsing)
-        import json
         query = json.loads(query_str)
-        
         count = context.mongodb_steps.execute_mongodb_count(collection, env, query)
         context.last_query_results = [{'count': count}]
         logger.info(f"Document count in {collection} with query: {count}")
@@ -168,10 +215,7 @@ def step_list_mongodb_collections(context):
     env = getattr(context, 'current_env', 'DEV')
     
     try:
-        connection = context.mongodb_steps.get_connection(env, 'MONGODB')
-        db = connection[mongodb_connector.get_database_name(env)]
-        
-        collections = db.list_collection_names()
+        collections = context.mongodb_steps.list_collections(env)
         context.last_query_results = [{'collections': collections}]
         logger.info(f"Found {len(collections)} collections in database")
         
@@ -200,117 +244,13 @@ def step_insert_test_document(context, collection):
     try:
         doc_id = context.mongodb_steps.insert_test_document(collection, env, test_document)
         context.last_inserted_doc_id = doc_id
+        context.last_used_collection = collection
         logger.info(f"Inserted test document with ID: {doc_id}")
         
     except Exception as e:
         logger.error(f"Insert test document failed: {e}")
         context.last_query_error = str(e)
         raise
-
-
-@then('the connection should be successful')
-def step_verify_connection_successful(context):
-    """Verify that the database connection was successful."""
-    if hasattr(context, 'last_query_error'):
-        raise AssertionError(f"Connection failed: {context.last_query_error}")
-    
-    if hasattr(context, 'last_query_results'):
-        logger.info("Database connection verified successfully")
-    else:
-        raise AssertionError("No query results available to verify connection")
-
-
-@then('the "{key}" should be greater than {expected_value:d}')
-def step_verify_value_greater_than(context, key, expected_value):
-    """Verify that stored value is greater than expected."""
-    if not hasattr(context, 'mongodb_steps'):
-        raise ValueError("No MongoDB steps context available")
-    
-    try:
-        actual_value = context.mongodb_steps.get_stored_result(key)
-        assert actual_value > expected_value, f"Value {actual_value} is not greater than {expected_value}"
-        logger.info(f"Verification passed: {key} ({actual_value}) > {expected_value}")
-        
-    except KeyError as e:
-        logger.error(f"Stored result not found: {e}")
-        raise
-
-
-@then('the collections should include "{collection_name}"')
-def step_verify_collection_exists(context, collection_name):
-    """Verify that collection exists in the database."""
-    if not hasattr(context, 'last_query_results') or not context.last_query_results:
-        raise ValueError("No collection list available")
-    
-    collections = context.last_query_results[0].get('collections', [])
-    assert collection_name in collections, f"Collection '{collection_name}' not found in database"
-    logger.info(f"Collection '{collection_name}' exists in database")
-
-
-@when('I clean up the test document')
-@then('I clean up the test document')
-@then('I clean up the migrated test data')
-def step_cleanup_test_documents(context):
-    """Clean up test documents."""
-    if hasattr(context, 'mongodb_steps'):
-        context.mongodb_steps.cleanup_test_documents()
-        logger.info("Test documents cleaned up successfully")
-
-
-# Enhanced cleanup for environment.py
-def mongodb_after_scenario(context, scenario):
-    """Clean up MongoDB resources after each scenario."""
-    if hasattr(context, 'mongodb_steps'):
-        context.mongodb_steps.cleanup_test_documents()
-        context.mongodb_steps.cleanup_connections()
-        logger.debug("MongoDB resources cleaned up after scenario")
-
-# Add these step definitions to your steps/database/mongodb_steps.py file
-
-@when('I query for the inserted document')
-def step_query_inserted_document(context):
-    """Query for the last inserted test document."""
-    if not hasattr(context, 'mongodb_steps'):
-        context.mongodb_steps = MongoDBSteps(context)
-    
-    if not hasattr(context, 'last_inserted_doc_id'):
-        raise ValueError("No inserted document ID available")
-    
-    env = getattr(context, 'current_env', 'DEV')
-    
-    try:
-        # Find the document by its ObjectId
-        from bson import ObjectId
-        query = {'_id': ObjectId(context.last_inserted_doc_id)}
-        
-        # Use a default collection or the last used collection
-        collection = getattr(context, 'last_used_collection', 'test_data')
-        
-        results = context.mongodb_steps.execute_mongodb_find(collection, env, query)
-        context.last_query_results = results
-        
-        logger.info(f"Queried for inserted document, found {len(results)} documents")
-        
-    except Exception as e:
-        logger.error(f"Query for inserted document failed: {e}")
-        context.last_query_error = str(e)
-        raise
-
-
-@then('the document should be found')
-def step_verify_document_found(context):
-    """Verify that the document was found."""
-    if hasattr(context, 'last_query_error'):
-        raise AssertionError(f"Query failed: {context.last_query_error}")
-    
-    if not hasattr(context, 'last_query_results') or not context.last_query_results:
-        raise AssertionError("No documents found")
-    
-    assert len(context.last_query_results) > 0, "Document was not found"
-    
-    # Store the found document for further validation
-    context.found_document = context.last_query_results[0]
-    logger.info("Document was successfully found")
 
 
 @given('I have a test document in collection "{collection}"')
@@ -356,9 +296,6 @@ def step_update_document_with_new_data(context):
     collection = getattr(context, 'last_used_collection', 'test_data')
     
     try:
-        connection = context.mongodb_steps.get_connection(env, 'MONGODB')
-        db = connection[mongodb_connector.get_database_name(env)]
-        
         # Define the update data
         update_data = {
             'status': 'completed',
@@ -367,14 +304,11 @@ def step_update_document_with_new_data(context):
             'tags': ['test', 'automation', 'updated']
         }
         
-        # Perform the update
-        from bson import ObjectId
-        filter_query = {'_id': ObjectId(context.test_document_id)}
-        update_query = {'$set': update_data}
+        success = context.mongodb_steps.update_test_document(
+            collection, env, context.test_document_id, update_data
+        )
         
-        result = db[collection].update_one(filter_query, update_query)
-        
-        if result.modified_count == 1:
+        if success:
             context.update_data = update_data
             logger.info("Document updated successfully")
         else:
@@ -382,6 +316,31 @@ def step_update_document_with_new_data(context):
             
     except Exception as e:
         logger.error(f"Document update failed: {e}")
+        raise
+
+
+@when('I query for the inserted document')
+def step_query_inserted_document(context):
+    """Query for the last inserted test document."""
+    if not hasattr(context, 'mongodb_steps'):
+        context.mongodb_steps = MongoDBSteps(context)
+    
+    if not hasattr(context, 'last_inserted_doc_id'):
+        raise ValueError("No inserted document ID available")
+    
+    env = getattr(context, 'current_env', 'DEV')
+    collection = getattr(context, 'last_used_collection', 'test_data')
+    
+    try:
+        query = {'_id': ObjectId(context.last_inserted_doc_id)}
+        results = context.mongodb_steps.execute_mongodb_find(collection, env, query)
+        context.last_query_results = results
+        
+        logger.info(f"Queried for inserted document, found {len(results)} documents")
+        
+    except Exception as e:
+        logger.error(f"Query for inserted document failed: {e}")
+        context.last_query_error = str(e)
         raise
 
 
@@ -398,9 +357,7 @@ def step_query_updated_document(context):
     collection = getattr(context, 'last_used_collection', 'test_data')
     
     try:
-        from bson import ObjectId
         query = {'_id': ObjectId(context.test_document_id)}
-        
         results = context.mongodb_steps.execute_mongodb_find(collection, env, query)
         context.last_query_results = results
         
@@ -410,6 +367,62 @@ def step_query_updated_document(context):
         logger.error(f"Query for updated document failed: {e}")
         context.last_query_error = str(e)
         raise
+
+
+# Verification steps
+@then('the connection should be successful')
+def step_verify_connection_successful(context):
+    """Verify that the database connection was successful."""
+    if hasattr(context, 'last_query_error'):
+        raise AssertionError(f"Connection failed: {context.last_query_error}")
+    
+    if hasattr(context, 'last_query_results'):
+        logger.info("Database connection verified successfully")
+    else:
+        raise AssertionError("No query results available to verify connection")
+
+
+@then('the "{key}" should be greater than {expected_value:d}')
+def step_verify_value_greater_than(context, key, expected_value):
+    """Verify that stored value is greater than expected."""
+    if not hasattr(context, 'db_manager'):
+        raise ValueError("No database manager context available")
+    
+    try:
+        actual_value = context.db_manager.get_stored_result(key)
+        assert actual_value > expected_value, f"Value {actual_value} is not greater than {expected_value}"
+        logger.info(f"Verification passed: {key} ({actual_value}) > {expected_value}")
+        
+    except KeyError as e:
+        logger.error(f"Stored result not found: {e}")
+        raise
+
+
+@then('the collections should include "{collection_name}"')
+def step_verify_collection_exists(context, collection_name):
+    """Verify that collection exists in the database."""
+    if not hasattr(context, 'last_query_results') or not context.last_query_results:
+        raise ValueError("No collection list available")
+    
+    collections = context.last_query_results[0].get('collections', [])
+    assert collection_name in collections, f"Collection '{collection_name}' not found in database"
+    logger.info(f"Collection '{collection_name}' exists in database")
+
+
+@then('the document should be found')
+def step_verify_document_found(context):
+    """Verify that the document was found."""
+    if hasattr(context, 'last_query_error'):
+        raise AssertionError(f"Query failed: {context.last_query_error}")
+    
+    if not hasattr(context, 'last_query_results') or not context.last_query_results:
+        raise AssertionError("No documents found")
+    
+    assert len(context.last_query_results) > 0, "Document was not found"
+    
+    # Store the found document for further validation
+    context.found_document = context.last_query_results[0]
+    logger.info("Document was successfully found")
 
 
 @then('the document should contain the updated data')
@@ -436,6 +449,67 @@ def step_verify_document_contains_updated_data(context):
     logger.info("Document contains all expected updated data")
 
 
+# Cleanup steps
+@when('I clean up the test document')
+@then('I clean up the test document')
+@then('I clean up the migrated test data')
+def step_cleanup_test_documents(context):
+    """Clean up test documents."""
+    if hasattr(context, 'mongodb_steps'):
+        context.mongodb_steps.cleanup_test_documents()
+        logger.info("Test documents cleaned up successfully")
+
+
+# Enhanced cleanup for environment.py
+def mongodb_after_scenario(context, scenario):
+    """Clean up MongoDB resources after each scenario."""
+    if hasattr(context, 'mongodb_steps'):
+        try:
+            context.mongodb_steps.cleanup_test_documents()
+            db_logger.debug("MongoDB test documents cleaned up after scenario")
+        except Exception as e:
+            db_logger.warning(f"Error during MongoDB cleanup: {e}")
+    
+    # Clean up MongoDB connections through database manager
+    if hasattr(context, 'db_manager'):
+        try:
+            context.db_manager.cleanup_connections()
+            db_logger.debug("MongoDB connections cleaned up after scenario")
+        except Exception as e:
+            db_logger.warning(f"Error cleaning up MongoDB connections: {e}")
+
+
+# Additional aggregation step (completion of the cut-off step)
 @when('I run aggregation pipeline on collection "{collection}"')
 def step_run_aggregation_pipeline(context, collection):
     """Run an aggregation pipeline on the specified collection."""
+    if not hasattr(context, 'mongodb_steps'):
+        context.mongodb_steps = MongoDBSteps(context)
+    
+    env = getattr(context, 'current_env', 'DEV')
+    
+    # Example aggregation pipeline - can be customized based on needs
+    pipeline = [
+        {'$match': {'status': 'active'}},
+        {'$group': {'_id': '$status', 'count': {'$sum': 1}}},
+        {'$sort': {'count': -1}}
+    ]
+    
+    try:
+        results = mongodb_connector.execute_aggregation_query(
+            environment=env,
+            collection_name=collection,
+            pipeline=pipeline
+        )
+        
+        # Convert DataFrame to list of dictionaries if needed
+        if hasattr(results, 'to_dict'):
+            results = results.to_dict('records')
+        
+        context.last_query_results = results
+        logger.info(f"Aggregation pipeline executed on {collection}, returned {len(results)} results")
+        
+    except Exception as e:
+        logger.error(f"Aggregation pipeline failed: {e}")
+        context.last_query_error = str(e)
+        raise

@@ -1,5 +1,4 @@
 # features/environment.py
-
 import os
 import time
 
@@ -16,27 +15,41 @@ except ImportError as e:
 
 # Import your existing logger
 try:
-    from utils.logger import logger
+    from utils.logger import logger, test_logger
 except ImportError:
     import logging
     logger = logging.getLogger(__name__)
+    test_logger = logger
 
 
 def before_all(context):
     """Setup before all tests."""
     logger.info("Starting test execution with enhanced database steps")
     context.test_start_time = time.time()
+    
+    # Initialize any global test configuration
+    context.test_config = {
+        'start_time': context.test_start_time,
+        'total_scenarios': 0,
+        'passed_scenarios': 0,
+        'failed_scenarios': 0
+    }
 
 
 def before_feature(context, feature):
     """Setup before each feature."""
     logger.info(f"Starting feature: {feature.name}")
     context.feature_start_time = time.time()
+    
+    # Initialize feature-level counters
+    context.feature_scenarios = 0
+    context.feature_passed = 0
+    context.feature_failed = 0
 
 
 def before_scenario(context, scenario):
     """Setup before each scenario."""
-    logger.info(f"Starting scenario: {scenario.name}")
+    test_logger.info(f"Starting scenario: {scenario.name}")
     context.scenario_start_time = time.time()
     
     # Reset any previous results
@@ -48,16 +61,40 @@ def before_scenario(context, scenario):
     context.comparison_result = None
     context.quality_check_results = None
     context.schema_comparison = None
+    
+    # Reset current database context
+    context.current_env = None
+    context.current_db_type = None
+    
+    # Initialize database manager if not exists
+    if not hasattr(context, 'db_manager'):
+        try:
+            from db.database_manager import DatabaseManager
+            context.db_manager = DatabaseManager()
+        except ImportError as e:
+            logger.warning(f"Could not initialize DatabaseManager: {e}")
 
 
 def after_scenario(context, scenario):
     """Cleanup after each scenario."""
     scenario_duration = time.time() - context.scenario_start_time
     
-    if scenario.status == "passed":
-        logger.info(f"Scenario passed: {scenario.name} (Duration: {scenario_duration:.2f}s)")
+    # Update counters
+    context.test_config['total_scenarios'] += 1
+    context.feature_scenarios += 1
+    
+    if scenario.status.name == "passed":
+        test_logger.info(f"✓ Scenario passed: {scenario.name} (Duration: {scenario_duration:.2f}s)")
+        context.test_config['passed_scenarios'] += 1
+        context.feature_passed += 1
     else:
-        logger.error(f"Scenario failed: {scenario.name} (Duration: {scenario_duration:.2f}s)")
+        test_logger.error(f"✗ Scenario failed: {scenario.name} (Duration: {scenario_duration:.2f}s)")
+        context.test_config['failed_scenarios'] += 1
+        context.feature_failed += 1
+        
+        # Log failure details if available
+        if hasattr(context, 'last_query_error'):
+            test_logger.error(f"Last error: {context.last_query_error}")
     
     # Clean up database connections using the enhanced steps
     try:
@@ -73,6 +110,10 @@ def after_scenario(context, scenario):
         if cross_database_cleanup:
             cross_database_cleanup(context)
             
+        # Clean up database manager connections
+        if hasattr(context, 'db_manager'):
+            context.db_manager.cleanup_connections()
+            
     except Exception as e:
         logger.warning(f"Error during cleanup: {e}")
 
@@ -80,10 +121,63 @@ def after_scenario(context, scenario):
 def after_feature(context, feature):
     """Cleanup after each feature."""
     feature_duration = time.time() - context.feature_start_time
+    
+    # Log feature summary
     logger.info(f"Feature completed: {feature.name} (Duration: {feature_duration:.2f}s)")
+    logger.info(f"Feature stats - Total: {context.feature_scenarios}, "
+                f"Passed: {context.feature_passed}, Failed: {context.feature_failed}")
 
 
 def after_all(context):
     """Cleanup after all tests."""
     total_duration = time.time() - context.test_start_time
-    logger.info(f"Test execution completed (Total duration: {total_duration:.2f}s)")
+    
+    # Log test execution summary
+    logger.info("=" * 60)
+    logger.info("TEST EXECUTION SUMMARY")
+    logger.info("=" * 60)
+    logger.info(f"Total duration: {total_duration:.2f}s")
+    logger.info(f"Total scenarios: {context.test_config['total_scenarios']}")
+    logger.info(f"Passed scenarios: {context.test_config['passed_scenarios']}")
+    logger.info(f"Failed scenarios: {context.test_config['failed_scenarios']}")
+    
+    if context.test_config['total_scenarios'] > 0:
+        pass_rate = (context.test_config['passed_scenarios'] / context.test_config['total_scenarios']) * 100
+        logger.info(f"Pass rate: {pass_rate:.1f}%")
+    
+    logger.info("=" * 60)
+    
+    # Final cleanup
+    try:
+        if hasattr(context, 'db_manager'):
+            context.db_manager.cleanup_connections()
+            logger.info("Final database cleanup completed")
+    except Exception as e:
+        logger.warning(f"Error during final cleanup: {e}")
+
+
+# Error handler for steps
+def after_step(context, step):
+    """Log step execution details."""
+    if step.status.name == "failed":
+        test_logger.error(f"Step failed: {step.name}")
+        if hasattr(step, 'exception'):
+            test_logger.error(f"Exception: {step.exception}")
+
+
+# Tag-based setup (optional)
+def before_tag(context, tag):
+    """Setup based on scenario tags."""
+    if tag == "database":
+        logger.debug("Setting up for database scenario")
+    elif tag == "mongodb":
+        logger.debug("Setting up for MongoDB scenario")
+    elif tag == "cross_database":
+        logger.debug("Setting up for cross-database scenario")
+
+
+def after_tag(context, tag):
+    """Cleanup based on scenario tags."""
+    if tag in ["database", "mongodb", "cross_database"]:
+        logger.debug(f"Cleaning up after {tag} scenario")
+        # Additional tag-specific cleanup can be added here

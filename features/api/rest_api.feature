@@ -181,15 +181,17 @@ Feature: REST API Testing
     Then response status code should be 200
     And response field "customer_id" should equal stored value "customer_id"
 
-  @regression @api @file
-  Scenario: Test file upload endpoint
-    Given multipart form data:
-      | field_name | field_value          | content_type     |
-      | file       | test_data/photo.jpg  | image/jpeg       |
-      | title      | Profile Photo        | text/plain       |
-    When I send POST request to "/customers/{created_customer_id}/photo" endpoint
-    Then response status code should be 200
-    And response should contain field "file_url"
+@regression @api @file
+Scenario: Test file upload endpoint
+  Given request headers:
+    | header_name | header_value     |
+    | Accept      | application/json |
+  When I upload file "test_data/photo.jpg" to "/customers/{created_customer_id}/photo" with form data
+    | field_name | field_value      |
+    | title      | Profile Photo    |
+  Then response status code should be 200
+  And response should contain field "file_url"
+
 
   @regression @api @async
   Scenario: Test asynchronous API endpoint
