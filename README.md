@@ -54,15 +54,10 @@ behave
 # Run smoke tests only
 behave --tags=@smoke
 
+tree -I '__pycache__|venv|*.pyc|*.log' -N --dirsfirst -L 5 > project_structure.txt 
 
 🗂️.
-├── .env
-├── .env.template
-├── .gitignore
-├── .vscode
-│   └── settings.json
-├── Dockerfile
-├── Jenkinsfile
+.
 ├── api
 │   ├── __init__.py
 │   ├── json_validator.py
@@ -72,7 +67,6 @@ behave --tags=@smoke
 │   ├── s3_connector.py
 │   ├── sql_integration.py
 │   └── sqs_connector.py
-├── behave.ini
 ├── config
 │   ├── config.ini
 │   └── environments.yaml
@@ -100,84 +94,83 @@ behave --tags=@smoke
 │   ├── database
 │   │   ├── cross_database
 │   │   │   └── data_sync_validation.feature
-│   │   ├── data_comparison.feature
 │   │   ├── nosql
 │   │   │   ├── mongodb_connection.feature
 │   │   │   ├── mongodb_crud.feature
 │   │   │   └── mongodb_operations.feature
-│   │   └── sql
-│   │       ├── basic_validation.feature
-│   │       ├── config_basedquery.feature
-│   │       └── data_validation.feature
-│   ├── environment.py
+│   │   ├── sql
+│   │   │   ├── basic_validation.feature
+│   │   │   ├── config_basedquery.feature
+│   │   │   └── data_validation.feature
+│   │   └── data_comparison.feature
+│   ├── kafka
+│   │   └── kafka_integration.feature
 │   ├── mq
 │   │   └── message_queue.feature
-│   └── steps
-│       ├── __init__.py
-│       ├── api_steps.py
-│       ├── aws_steps.py
-│       ├── database
-│       │   ├── base_database_steps.py
-│       │   ├── cross_database_steps.py
-│       │   ├── enhanced_data_compare_steps.py.py
-│       │   ├── mongodb_steps.py
-│       │   ├── query_database_steps.py
-│       │   └── sql_database_steps.py
-│       ├── database_steps.py
-│       └── mq_steps.py
-├── framework_analysis.sh
-├── framework_analysis.txt
-├── generate_requirements.py
+│   ├── steps
+│   │   ├── database
+│   │   │   ├── base_database_steps.py
+│   │   │   ├── cross_database_steps.py
+│   │   │   ├── enhanced_data_compare_steps.py.py
+│   │   │   ├── mongodb_steps.py
+│   │   │   ├── query_database_steps.py
+│   │   │   └── sql_database_steps.py
+│   │   ├── __init__.py
+│   │   ├── api_steps.py
+│   │   ├── aws_steps.py
+│   │   ├── database_steps.py
+│   │   ├── kafka_steps.py
+│   │   └── mq_steps.py
+│   └── environment.py
 ├── logs
 │   ├── api
-│   │   └── .gitkeep
 │   ├── application
-│   │   └── .gitkeep
 │   ├── database
-│   │   └── .gitkeep
 │   ├── mq
-│   │   └── .gitkeep
 │   └── test_execution
-│       └── .gitkeep
 ├── mq
 │   ├── __init__.py
+│   ├── kafka_connector.py
 │   └── mq_producer.py
 ├── output
 │   ├── exports
-│   │   └── .gitkeep
 │   ├── junit
-│   │   └── .gitkeep
 │   └── reports
-│       └── .gitkeep
 ├── path
 │   └── to
-├── project_structure.txt
-├── requirements.txt
 ├── scripts
 │   ├── __init__.py
 │   └── run.py
 ├── tests
+│   ├── unit
+│   │   ├── test_data_comparator.py
+│   │   ├── test_data_validator.py
+│   │   ├── test_export_utils.py
+│   │   ├── test_json_validator.py
+│   │   └── test_query_loader.py
+│   └── __init__.py
+├── utils
 │   ├── __init__.py
-│   └── unit
-│       ├── .gitkeep
-│       ├── test_data_comparator.py
-│       ├── test_data_validator.py
-│       ├── test_export_utils.py
-│       ├── test_json_validator.py
-│       └── test_query_loader.py
-├── tox.ini
-└── utils
-    ├── __init__.py
-    ├── config_loader.py
-    ├── custom_exceptions.py
-    ├── data_cleaner.py
-    ├── data_comparator.py
-    ├── data_validator.py
-    ├── export_utils.py
-    ├── logger.py
-    └── query_loader.py
+│   ├── config_loader.py
+│   ├── custom_exceptions.py
+│   ├── data_cleaner.py
+│   ├── data_comparator.py
+│   ├── data_loader.py
+│   ├── data_validator.py
+│   ├── export_utils.py
+│   ├── logger.py
+│   └── query_loader.py
+├── Dockerfile
+├── Jenkinsfile
+├── README.md
+├── behave.ini
+├── generate_requirements.py
+├── project_structure.txt
+├── requirements.txt
+└── tox.ini
 
-36 directories, 85 files
+36 directories, 75 files
+
 
 
 📝 Git Ignore (.gitignore)

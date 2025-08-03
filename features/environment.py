@@ -13,6 +13,14 @@ except ImportError as e:
     mongodb_after_scenario = None
     cross_database_cleanup = None
 
+# Import Kafka cleanup function
+try:
+    from steps.kafka_steps import kafka_after_scenario
+except ImportError as e:
+    print(f"Warning: Could not import Kafka cleanup function: {e}")
+    kafka_after_scenario = None
+
+
 # Import your existing logger
 try:
     from utils.logger import logger, test_logger
@@ -113,6 +121,10 @@ def after_scenario(context, scenario):
         # Clean up database manager connections
         if hasattr(context, 'db_manager'):
             context.db_manager.cleanup_connections()
+
+        # Call Kafka cleanup function
+        if kafka_after_scenario:
+            kafka_after_scenario(context, scenario)
             
     except Exception as e:
         logger.warning(f"Error during cleanup: {e}")
@@ -174,10 +186,12 @@ def before_tag(context, tag):
         logger.debug("Setting up for MongoDB scenario")
     elif tag == "cross_database":
         logger.debug("Setting up for cross-database scenario")
+    elif tag == "kafka":
+        logger.debug("Setting up for Kafka scenario")
 
 
 def after_tag(context, tag):
     """Cleanup based on scenario tags."""
-    if tag in ["database", "mongodb", "cross_database"]:
+    if tag in ["database", "mongodb", "cross_database", "kafka"]:
         logger.debug(f"Cleaning up after {tag} scenario")
         # Additional tag-specific cleanup can be added here
