@@ -16,6 +16,15 @@ class AutomationFrameworkError(Exception):
         return self.message
 
 
+class DataLoadError(AutomationFrameworkError):
+    """Raised when data loading fails."""
+    
+    def __init__(self, message: str, source: Optional[Any] = None, **kwargs):
+        details = {"source": str(source)[:200] if source else None}
+        details.update(kwargs)
+        super().__init__(message, details)
+
+
 class DatabaseConnectionError(AutomationFrameworkError):
     """Raised when database connection fails."""
     

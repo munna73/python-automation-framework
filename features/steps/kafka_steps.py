@@ -1,5 +1,9 @@
+# ==============================
 # features/steps/kafka_steps.py
-
+# ==============================
+"""
+Step definitions for Behave BDD tests using a Kafka connector.
+"""
 import json
 import os
 import time
@@ -8,9 +12,10 @@ from typing import List, Dict, Any
 
 # Import the new Kafka connector
 try:
+    # We are now importing the 'config_loader' object
     from mq.kafka_connector import KafkaConnector
     from utils.logger import logger
-    from utils.config_loader import get_config
+    from utils.config_loader import config_loader
 except ImportError as e:
     logger.error(f"Import error in kafka_steps.py: {e}")
     raise
@@ -19,12 +24,14 @@ except ImportError as e:
 def step_configure_kafka_connector(context, env):
     """
     Sets up a Kafka connector instance in the behave context.
+    The configuration is loaded from the config_loader using the specified environment.
     """
     logger.info(f"Configuring Kafka connector for environment: {env}")
     try:
-        # Load Kafka configuration from the config file
-        config = get_config(env)
-        bootstrap_servers = config.get('kafka', {}).get('bootstrap_servers')
+        # Corrected call: Use the get_kafka_config method from the imported object
+        # The method now accepts the 'env' parameter
+        kafka_config_obj = config_loader.get_kafka_config(env=env)
+        bootstrap_servers = kafka_config_obj.brokers
         
         if not bootstrap_servers:
             raise ValueError(f"Kafka bootstrap_servers not found in config for '{env}'")
