@@ -119,8 +119,17 @@ class ConfigLoader:
         'access_key_id', 'secret_access_key'
     }
     
-    def __init__(self, config_dir: Optional[str] = None):
+    def __init__(self, config_dir: Optional[str] = None, active_env: Optional[str] = None):
+        """
+        Initializes the ConfigLoader.
+        
+        Args:
+            config_dir: The directory where configuration files are located.
+            active_env: The active environment/tag (e.g., 'smoke', 'dev').
+                        This is used to load only the relevant config sections.
+        """
         self.config_dir = Path(config_dir or "config")
+        self.active_env = active_env.upper() if active_env else None
         self._config_cache: Dict[str, Any] = {}
         
     def _should_resolve_from_env(self, key: str, value: str) -> bool:
@@ -198,7 +207,8 @@ class ConfigLoader:
             
     def _load_ini_config(self, file_path: Path) -> Dict[str, Any]:
         """Load INI configuration file."""
-        config = configparser.ConfigParser()
+        # Disable interpolation to handle '%' characters in values like datetime formats
+        config = configparser.ConfigParser(interpolation=None)
         config.read(file_path)
         
         # Convert to dictionary and resolve sensitive values from environment
@@ -244,18 +254,20 @@ class ConfigLoader:
         else:
             return data
             
-    def get_database_config(self, env: str, db_type: str) -> DatabaseConfig:
+    def get_database_config(self, db_type: str) -> DatabaseConfig:
         """
-        Get database configuration for specific environment and type.
+        Get database configuration for the active environment and type.
         
         Args:
-            env: Environment name (DEV, QA, PROD)
             db_type: Database type (ORACLE, POSTGRES, MONGODB)
             
         Returns:
             DatabaseConfig object
         """
-        config_key = f"{env}_{db_type}"
+        if not self.active_env:
+            raise ConfigurationError("An active environment must be set to load database config.")
+            
+        config_key = f"{self.active_env}_{db_type.upper()}"
         
         if config_key in self._config_cache:
             return self._config_cache[config_key]
@@ -268,12 +280,9 @@ class ConfigLoader:
             
         db_config = config[config_key]
         
-        # Username and password are already resolved from environment variables
-        # by _resolve_value in _load_ini_config (only if they look like env vars)
         username = db_config.get('username')
         password = db_config.get('password')
         
-        # Validate that credentials exist
         if not username:
             raise ConfigurationError(
                 f"Username not found for {config_key}.",
@@ -286,7 +295,6 @@ class ConfigLoader:
                 config_key=f"{config_key}.password"
             )
         
-        # Handle Oracle service_name vs database
         database = db_config.get('database', db_config.get('service_name', ''))
         
         try:
@@ -313,7 +321,6 @@ class ConfigLoader:
             config = self.load_config_file("config.ini")
             aws_config = config.get('AWS', {})
             
-            # These will be resolved from environment if they match the pattern
             access_key = aws_config.get('access_key_id', '')
             secret_key = aws_config.get('secret_access_key', '')
             
@@ -344,8 +351,7 @@ class ConfigLoader:
             APIConfig object
         """
         try:
-            # We assume API configs are sections like 'API_petstore'
-            section_name = f"API_{config_name.upper()}"
+            section_name = config_name.upper()
             
             config = self.load_config_file("config.ini")
             api_config = config.get(section_name, {})
@@ -356,11 +362,9 @@ class ConfigLoader:
                     config_key=section_name
                 )
             
-            # Token will be resolved from env if it matches the pattern
             token = api_config.get('token', '')
             
             if not token:
-                # Assuming all API configs require a token for simplicity
                 raise ConfigurationError(
                     f"API token not found in '{section_name}'.",
                     config_key=f"{section_name}.token"
@@ -390,7 +394,7 @@ class ConfigLoader:
                 channel=mq_config.get('channel', ''),
                 queue=mq_config.get('queue', ''),
                 username=mq_config.get('username', ''),
-                password=mq_config.get('password', ''),  # Will resolve from env if uppercase
+                password=mq_config.get('password', ''),
                 ssl_cipher=mq_config.get('ssl_cipher'),
                 timeout=int(mq_config.get('timeout', '30'))
             )
@@ -398,17 +402,17 @@ class ConfigLoader:
             raise ConfigurationError(f"Invalid MQ configuration: {str(e)}",
                                    config_key="MQ")
     
-    def get_kafka_config(self, env: str) -> KafkaConfig:
+    def get_kafka_config(self) -> KafkaConfig:
         """
-        Get Kafka configuration from an environment-specific section.
+        Get Kafka configuration from the active environment.
         
-        Args:
-            env: Environment name (DEV, QA, PROD)
-            
         Returns:
             KafkaConfig object
         """
-        config_key = f"KAFKA_{env.upper()}"
+        if not self.active_env:
+            raise ConfigurationError("An active environment must be set to load Kafka config.")
+            
+        config_key = f"KAFKA_{self.active_env}"
         
         if config_key in self._config_cache:
             return self._config_cache[config_key]
@@ -423,7 +427,6 @@ class ConfigLoader:
             )
 
         try:
-            # The brokers field is expected to be a comma-separated string
             brokers_str = kafka_config.get('brokers', '')
             if not brokers_str:
                 raise ConfigurationError(f"Kafka brokers not specified in '{config_key}'.")
@@ -432,7 +435,7 @@ class ConfigLoader:
             return KafkaConfig(
                 brokers=brokers_list,
                 topic=kafka_config.get('topic', ''),
-                group_id=kafka_config.get('group_id', f'behave_tests_{env}_group'),
+                group_id=kafka_config.get('group_id', f'behave_tests_{self.active_env}_group'),
                 ssl_enabled=kafka_config.get('ssl_enabled', 'false').lower() == 'true',
                 timeout=int(kafka_config.get('timeout', 30))
             )
@@ -444,7 +447,6 @@ class ConfigLoader:
         """Print status of required environment variables for debugging."""
         print("\n=== Environment Variables Status ===")
         
-        # Check for database and AWS credentials
         patterns = [
             r'.*_ORACLE_USERNAME$',
             r'.*_ORACLE_PASSWORD$',
@@ -464,7 +466,6 @@ class ConfigLoader:
                     print(f"  ✓ {var}: SET")
                     found = True
             if not found:
-                # Show example of what we're looking for
                 example = pattern.replace('.*', 'QA').replace('$', '')
                 print(f"  ✗ No variable matching pattern: {example}")
         
@@ -508,23 +509,34 @@ class ConfigLoader:
         return data
         
     def validate_config(self) -> bool:
-        """Validate all configuration settings."""
-        print("Validating configuration...")
+        """
+        Validate configuration for the active environment.
+        
+        This method will only check the sections related to the active environment,
+        e.g., SMOKE_ORACLE, SMOKE_KAFKA, etc.
+        """
+        if not self.active_env:
+            print("No active environment set. Skipping configuration validation.")
+            return False
+            
+        print(f"Validating configuration for environment: {self.active_env}...")
         
         # Print environment status for debugging
         self.print_environment_status()
         
         try:
-            config = self.load_config_file("config.ini")
-            
-            # Test loading some configs
-            environments = self.get_all_environments()
-            print(f"Found environments: {environments}")
-            
+            # We don't need to load the full config to check sections.
+            # We can simply try to load the specific configs we need.
+            # This is a more targeted validation.
+            self.get_database_config('ORACLE')
+            self.get_kafka_config()
+            self.get_api_config('API')
+
+            print(f"Configuration for '{self.active_env}' is valid.")
             return True
             
         except Exception as e:
-            print(f"Configuration validation failed: {e}")
+            print(f"Configuration validation failed for '{self.active_env}': {e}")
             return False
     
     def get_custom_config(self, section: str, key: Optional[str] = None) -> Any:
@@ -556,34 +568,3 @@ class ConfigLoader:
         """Clear cache and reload configuration."""
         self._config_cache.clear()
         self.load_config_file.cache_clear()
-    
-    def get_all_environments(self) -> List[str]:
-        """Get all available environments from config."""
-        config = self.load_config_file("config.ini")
-        environments = set()
-        
-        # Extract environment names from section names (e.g., DEV_ORACLE -> DEV)
-        pattern = re.compile(r'^([A-Z]+)_[A-Z]+$')
-        for section in config.keys():
-            match = pattern.match(section)
-            if match:
-                environments.add(match.group(1))
-        
-        return sorted(list(environments))
-    
-    def get_all_database_types(self, env: str) -> List[str]:
-        """Get all database types available for an environment."""
-        config = self.load_config_file("config.ini")
-        db_types = []
-        
-        for section in config.keys():
-            if section.startswith(f"{env}_"):
-                db_type = section.replace(f"{env}_", "")
-                if db_type in ['ORACLE', 'POSTGRES', 'POSTGRESQL', 'MONGODB']:
-                    db_types.append(db_type)
-        
-        return sorted(db_types)
-
-
-# Singleton instance
-config_loader = ConfigLoader()
