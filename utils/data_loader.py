@@ -1,3 +1,5 @@
+from __future__ import annotations # Added to defer type hint evaluation
+
 """
 Data Loader Module for Test Automation Framework. 
 
@@ -33,47 +35,66 @@ import zipfile
 import tarfile
 from io import StringIO, BytesIO
 
-# Import custom modules
+# Import custom modules with proper error handling
 try:
-    # Corrected imports:
-    # 1. Importing specific exception classes.
-    # 2. Importing the 'logger' instance (assuming it's a singleton or initialized globally).
-    # 3. Importing the 'config_loader' singleton instance.
     from utils.custom_exceptions import DataLoadError, ConfigurationError, ValidationError
+    # Import the logger and config_loader instances (assuming they are singletons)
     from utils.logger import logger
     from utils.config_loader import config_loader 
     from db.database_connector import DatabaseConnector
     from api.rest_client import RestClient
 except ImportError as e:
-    # Fallback for standalone operation or initial debugging.
-    # This block ensures the DataLoader can still be instantiated even if
-    # some core dependencies are not yet fully set up, though functionality will be limited.
     print(f"Warning: Could not import custom modules: {e}")
+    
+    # Define minimal exception classes for standalone operation
     class DataLoadError(Exception):
         pass
+    
     class ConfigurationError(Exception):
         pass
+    
     class ValidationError(Exception):
         pass
-    # Define mock objects for critical dependencies if imports fail,
-    # to prevent NameError and allow the program to proceed for debugging.
+    
+    # Mock classes for missing dependencies - these will act as simple instances
+    class MockLogger:
+        def __init__(self, name=None):
+            logging.basicConfig(level=logging.INFO)
+            self._logger = logging.getLogger(name or __name__)
+        
+        def info(self, message): self._logger.info(message)
+        def warning(self, message): self._logger.warning(message)
+        def error(self, message): self._logger.error(message)
+        def debug(self, message): self._logger.debug(message)
+        def get_logger(self): return self._logger # For compatibility if needed
+    
     class MockConfigLoader:
-        def load_config_file(self, filename): return {} # Mock method for load_config_file
-    config_loader = MockConfigLoader()
+        def load_config_file(self, filename): return {}
+        def get_all_config(self): return {} # For compatibility with older usage
+        def get_section(self, section): return {} # For compatibility with older usage
+    
     class MockDatabaseConnector:
         def __init__(self, *args, **kwargs): pass
         def execute_query(self, query): return pd.DataFrame()
         def close(self): pass
-    DatabaseConnector = MockDatabaseConnector
+    
     class MockRestClient:
-        def __init__(self, *args, **kwargs): pass
-        def get(self, *args, **kwargs): return requests.Response()
-        def post(self, *args, **kwargs): return requests.Response()
+        def __init__(self, *args, **kwargs):
+            self.session = requests.Session()
+        
+        def get(self, url, headers=None, params=None):
+            return self.session.get(url, headers=headers, params=params)
+        
+        def post(self, url, headers=None, data=None, params=None):
+            return self.session.post(url, headers=headers, json=data, params=params)
+        
         def close(self): pass
+    
+    # Assign mock instances to the expected names
+    logger = MockLogger(__name__)
+    config_loader = MockConfigLoader()
+    DatabaseConnector = MockDatabaseConnector
     RestClient = MockRestClient
-    # Fallback for logger if it couldn't be imported
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(__name__)
 
 
 class DataLoader:
@@ -89,22 +110,24 @@ class DataLoader:
         Initialize DataLoader with configuration.
         
         Args:
-            config_path: Path to configuration file. This is now primarily for
-                         loading DataLoader's *internal* settings, not the main
-                         application configuration (which is handled by config_loader).
-            cache_enabled: Enable/disable data caching.
+            config_path: Path to configuration file
+            cache_enabled: Enable/disable data caching
         """
         self.config_path = config_path
         self.cache_enabled = cache_enabled
         self.data_cache = {}
         self.transformations = {}
         self.validators = {}
-        self.logger = self._setup_logger()
+        self.logger = self._setup_logger() # Use the global logger instance
         
-        # Load configuration for DataLoader's internal settings
-        # This uses the global config_loader instance to load the specific file
+        # Load configuration if provided
         if config_path and os.path.exists(config_path):
-            self.config = config_loader.load_config_file(os.path.basename(config_path))
+            try:
+                # Use the global config_loader instance to load the specific file
+                self.config = config_loader.load_config_file(os.path.basename(config_path))
+            except Exception as e:
+                self.logger.warning(f"Could not load config from {config_path}: {e}")
+                self.config = self._get_default_config()
         else:
             self.config = self._get_default_config()
             
@@ -130,28 +153,11 @@ class DataLoader:
 
     def _setup_logger(self) -> logging.Logger:
         """Set up logging for data loader."""
-        try:
-            # Use the imported 'logger' instance directly
-            return logger 
-        except NameError: 
-            # Fallback to standard logging if 'logger' could not be imported
-            logging.basicConfig(level=logging.INFO)
-            return logging.getLogger(__name__)
-
-    def _load_configuration(self, config_path: str) -> Dict[str, Any]:
-        """
-        Load configuration from file using the global config_loader instance.
-        This is for DataLoader's internal configuration, not the main app config.
-        """
-        try:
-            # Use the global config_loader instance to load the specific file
-            return config_loader.load_config_file(os.path.basename(config_path))
-        except Exception as e:
-            self.logger.warning(f"Could not load config from {config_path}: {e}")
-            return self._get_default_config()
+        # Directly return the globally imported logger instance
+        return logger.get_logger() if hasattr(logger, 'get_logger') else logger 
 
     def _get_default_config(self) -> Dict[str, Any]:
-        """Get default configuration for DataLoader's internal settings."""
+        """Get default configuration."""
         return {
             'data_sources': {
                 'csv': {'encoding': 'utf-8', 'delimiter': ','},
@@ -382,7 +388,6 @@ class DataLoader:
                 content = f.read()
                 
         if kwargs.get('as_dataframe', False):
-            # Try to parse as structured text
             lines = content.strip().split('\n')
             if kwargs.get('delimiter'):
                 data = [line.split(kwargs['delimiter']) for line in lines]
@@ -462,16 +467,6 @@ class DataLoader:
 
     def load_multiple_sources(self, sources: List[Dict[str, Any]], 
                             merge_strategy: str = 'concat') -> pd.DataFrame:
-        """
-        Load data from multiple sources and combine them.
-        
-        Args:
-            sources: List of source configurations
-            merge_strategy: How to combine data ('concat', 'merge', 'join')
-            
-        Returns:
-            Combined DataFrame
-        """
         dataframes = []
         
         for source_config in sources:
@@ -481,7 +476,6 @@ class DataLoader:
             
             data = self.load_data(source, data_type, **options)
             
-            # Ensure data is a DataFrame
             if not isinstance(data, pd.DataFrame):
                 if isinstance(data, (list, dict)):
                     data = pd.json_normalize(data) if isinstance(data, dict) else pd.DataFrame(data)
@@ -490,7 +484,6 @@ class DataLoader:
             
             dataframes.append(data)
         
-        # Combine DataFrames based on strategy
         if merge_strategy == 'concat':
             return pd.concat(dataframes, ignore_index=True)
         elif merge_strategy == 'merge' and len(dataframes) >= 2:
@@ -508,63 +501,39 @@ class DataLoader:
 
     def load_data_async(self, sources: List[Union[str, Dict]], 
                        max_workers: int = 5) -> List[Any]:
-        """
-        Load data from multiple sources asynchronously.
-        
-        Args:
-            sources: List of data sources
-            max_workers: Maximum number of concurrent workers
-            
-        Returns:
-            List of loaded data
-        """
         results = []
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all loading tasks
             future_to_source = {}
-            for source in sources:
-                if isinstance(source, dict):
-                    future = executor.submit(
-                        self.load_data, 
-                        source.get('source'),
-                        source.get('type'),
-                        **source.get('options', {})
-                    )
-                else:
-                    future = executor.submit(self.load_data, source)
-                future_to_source[future] = source
+            for source_config in sources: # Iterate through source_config dictionary
+                source = source_config.get('source')
+                data_type = source_config.get('type')
+                options = source_config.get('options', {})
+                future = executor.submit(
+                    self.load_data, 
+                    source,
+                    data_type,
+                    **options
+                )
+                future_to_source[future] = source_config # Store the whole config for result reporting
             
-            # Collect results
-            for future in as_completed(future_to_source): # Corrected from `futures` to `future_to_source`
-                source = future_to_source[future]
+            for future in as_completed(future_to_source):
+                source_config = future_to_source[future]
                 try:
                     data = future.result()
-                    results.append({'source': source, 'data': data, 'success': True})
+                    results.append({'source': source_config, 'data': data, 'success': True})
                 except Exception as e:
-                    results.append({'source': source, 'error': str(e), 'success': False})
+                    results.append({'source': source_config, 'error': str(e), 'success': False})
         
         return results
 
     def load_streaming_data(self, source: str, chunk_size: int = 1000, 
                           **kwargs) -> Generator[pd.DataFrame, None, None]:
-        """
-        Load data in streaming fashion for large datasets.
-        
-        Args:
-            source: Data source
-            chunk_size: Size of each chunk
-            **kwargs: Additional parameters
-            
-        Yields:
-            DataFrame chunks
-        """
         if source.endswith('.csv'):
             for chunk in pd.read_csv(source, chunksize=chunk_size, **kwargs):
                 yield self._apply_transformations(chunk, **kwargs)
         
         elif source.startswith('SELECT'):
-            # For database streaming, we need to implement pagination
             offset = 0
             while True:
                 paginated_query = f"{source} LIMIT {chunk_size} OFFSET {offset}"
@@ -577,26 +546,21 @@ class DataLoader:
                 offset += chunk_size
         
         else:
-            # For other sources, load all data and chunk it
             data = self.load_data(source, **kwargs)
             if isinstance(data, pd.DataFrame):
                 for i in range(0, len(data), chunk_size):
                     yield data.iloc[i:i+chunk_size]
 
     def register_transformation(self, name: str, func: Callable):
-        """Register a custom data transformation function."""
         self.transformations[name] = func
 
     def register_validator(self, name: str, func: Callable):
-        """Register a custom data validation function."""
         self.validators[name] = func
 
     def _apply_transformations(self, data: Any, **kwargs) -> Any:
-        """Apply registered transformations to data."""
         if not isinstance(data, pd.DataFrame):
             return data
         
-        # Apply built-in transformations
         if self.config['transformations']['strip_whitespace']:
             data = self._strip_whitespace(data)
         
@@ -606,7 +570,6 @@ class DataLoader:
         if self.config['transformations']['handle_nulls']:
             data = self._handle_nulls(data)
         
-        # Apply custom transformations
         transformations = kwargs.get('transformations', [])
         for transform_name in transformations:
             if transform_name in self.transformations:
@@ -615,7 +578,6 @@ class DataLoader:
         return data
 
     def _validate_data(self, data: Any, **kwargs):
-        """Validate loaded data."""
         validators = kwargs.get('validators', [])
         
         for validator_name in validators:
@@ -625,22 +587,18 @@ class DataLoader:
                     raise ValidationError(f"Data validation failed: {message}")
 
     def _strip_whitespace(self, data: pd.DataFrame) -> pd.DataFrame:
-        """Remove leading/trailing whitespace from string columns."""
         string_columns = data.select_dtypes(include=['object']).columns
         data[string_columns] = data[string_columns].apply(lambda x: x.str.strip() if x.dtype == 'object' else x)
         return data
 
     def _auto_convert_types(self, data: pd.DataFrame) -> pd.DataFrame:
-        """Automatically convert data types."""
         for column in data.columns:
-            # Try to convert to numeric
             if data[column].dtype == 'object':
                 try:
                     data[column] = pd.to_numeric(data[column], errors='ignore')
                 except:
                     pass
                 
-                # Try to convert to datetime
                 if data[column].dtype == 'object':
                     try:
                         data[column] = pd.to_datetime(data[column], errors='ignore', infer_datetime_format=True)
@@ -650,33 +608,26 @@ class DataLoader:
         return data
 
     def _handle_nulls(self, data: pd.DataFrame) -> pd.DataFrame:
-        """Handle null values in data."""
-        # Replace common null representations
         null_values = ['', 'NULL', 'null', 'None', 'none', 'N/A', 'n/a', '#N/A']
         data = data.replace(null_values, np.nan)
         return data
 
     def _xml_to_dict(self, element: ET.Element) -> Dict[str, Any]:
-        """Convert XML element to dictionary."""
         result = {}
         
-        # Add attributes
         if element.attrib:
             result.update(element.attrib)
         
-        # Add text content
         if element.text and element.text.strip():
             if len(element) == 0:
                 return element.text.strip()
             else:
                 result['text'] = element.text.strip()
         
-        # Add child elements
         for child in element:
             child_data = self._xml_to_dict(child)
             
             if child.tag in result:
-                # Convert to list if multiple elements with same tag
                 if not isinstance(result[child.tag], list):
                     result[child.tag] = [result[child.tag]]
                 result[child.tag].append(child_data)
@@ -685,16 +636,14 @@ class DataLoader:
         
         return result
 
-    def _create_db_connector(self, **kwargs) -> 'DatabaseConnector':
+    def _create_db_connector(self, **kwargs) -> 'DatabaseConnector': # Changed to string literal
         """Create database connector."""
         try:
             return DatabaseConnector(**kwargs)
-        except NameError: # If DatabaseConnector import failed
-            # Fallback to simple SQLite connector
+        except NameError:
             return self._create_simple_db_connector(**kwargs)
 
     def _create_simple_db_connector(self, **kwargs):
-        """Create simple database connector for SQLite."""
         class SimpleDBConnector:
             def __init__(self, db_path: str = ':memory:'):
                 self.connection = sqlite3.connect(db_path)
@@ -707,16 +656,14 @@ class DataLoader:
         
         return SimpleDBConnector(kwargs.get('db_path', ':memory:'))
 
-    def _create_api_client(self, **kwargs) -> 'RestClient':
+    def _create_api_client(self, **kwargs) -> 'RestClient': # Changed to string literal
         """Create API client."""
         try:
             return RestClient(**kwargs)
-        except NameError: # If RestClient import failed
-            # Fallback to simple requests-based client
+        except NameError:
             return self._create_simple_api_client(**kwargs)
 
     def _create_simple_api_client(self, **kwargs):
-        """Create simple API client using requests."""
         class SimpleAPIClient:
             def __init__(self, base_url: str = '', timeout: int = 30):
                 self.base_url = base_url
@@ -736,16 +683,13 @@ class DataLoader:
             kwargs.get('timeout', 30)
         )
 
-    def _generate_cache_key(self, source: Any, data_type: str, kwargs: Dict) -> str:
-        """Generate cache key for data."""
+    def _generate_cache_key(self, source: Any, data_type: str, kwargs: Dict[str, Any]) -> str:
         import hashlib
         key_string = f"{source}_{data_type}_{sorted(kwargs.items())}"
         return hashlib.md5(key_string.encode()).hexdigest()
 
     def _cache_data(self, cache_key: str, data: Any):
-        """Cache loaded data."""
         if len(self.data_cache) >= self.config['cache']['max_size']:
-            # Remove oldest entry
             oldest_key = next(iter(self.data_cache))
             del self.data_cache[oldest_key]
         
@@ -755,12 +699,10 @@ class DataLoader:
         }
 
     def clear_cache(self):
-        """Clear data cache."""
         self.data_cache.clear()
         self.logger.info("Data cache cleared")
 
     def get_cache_info(self) -> Dict[str, Any]:
-        """Get cache information."""
         return {
             'cache_size': len(self.data_cache),
             'max_size': self.config['cache']['max_size'],
@@ -769,15 +711,6 @@ class DataLoader:
 
     def save_data(self, data: Union[pd.DataFrame, Dict, List], 
                   output_path: str, format_type: Optional[str] = None, **kwargs):
-        """
-        Save data to file.
-        
-        Args:
-            data: Data to save
-            output_path: Output file path
-            format_type: Output format (auto-detected if None)
-            **kwargs: Additional parameters
-        """
         if format_type is None:
             format_type = Path(output_path).suffix.lower()
         
@@ -816,7 +749,6 @@ class DataLoader:
         self.logger.info(f"Data saved to {output_path}")
 
     def get_data_info(self, data: Any) -> Dict[str, Any]:
-        """Get information about loaded data."""
         info = {
             'type': type(data).__name__,
             'size': sys.getsizeof(data)
@@ -841,23 +773,12 @@ class DataLoader:
         return info
 
     def create_data_pipeline(self, steps: List[Dict[str, Any]]) -> 'DataPipeline':
-        """
-        Create a data processing pipeline.
-        
-        Args:
-            steps: List of pipeline steps
-            
-        Returns:
-            DataPipeline object
-        """
         return DataPipeline(self, steps)
 
     def __enter__(self):
-        """Context manager entry."""
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit."""
         if self.db_connector and hasattr(self.db_connector, 'close'):
             self.db_connector.close()
         
@@ -871,27 +792,11 @@ class DataPipeline:
     """
     
     def __init__(self, data_loader: DataLoader, steps: List[Dict[str, Any]]):
-        """
-        Initialize data pipeline.
-        
-        Args:
-            data_loader: DataLoader instance
-            steps: List of pipeline steps
-        """
         self.data_loader = data_loader
         self.steps = steps
-        self.logger = data_loader.logger # Use the same logger as DataLoader
+        self.logger = data_loader.logger
         
     def run(self, initial_data: Optional[Any] = None) -> Any:
-        """
-        Execute the data pipeline.
-        
-        Args:
-            initial_data: Optional initial data to start the pipeline with.
-            
-        Returns:
-            The final processed data.
-        """
         current_data = initial_data
         
         for i, step_config in enumerate(self.steps):
