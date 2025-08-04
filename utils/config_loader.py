@@ -97,6 +97,14 @@ class AWSConfig:
             'region_name': self.region
         }
 
+@dataclass
+class KafkaConfig:
+    """Kafka configuration data class."""
+    brokers: List[str]
+    topic: str
+    group_id: str
+    ssl_enabled: bool = False
+    timeout: int = 30
 
 class ConfigLoader:
     """Configuration loader with support for multiple formats."""
@@ -359,6 +367,37 @@ class ConfigLoader:
         except ValueError as e:
             raise ConfigurationError(f"Invalid MQ configuration: {str(e)}",
                                    config_key="MQ")
+    
+    def get_kafka_config(self) -> KafkaConfig:
+        """
+        Get Kafka configuration from the 'kafka' section of the config file.
+        """
+        config = self.load_config_file("config.ini")
+        kafka_config = config.get('kafka', {})
+
+        if not kafka_config:
+            raise ConfigurationError(
+                "Kafka section not found in configuration file.",
+                config_key="kafka"
+            )
+
+        try:
+            # The brokers field is expected to be a comma-separated string
+            brokers_str = kafka_config.get('brokers', '')
+            if not brokers_str:
+                raise ConfigurationError("Kafka brokers not specified.")
+            brokers_list = [b.strip() for b in brokers_str.split(',')]
+            
+            return KafkaConfig(
+                brokers=brokers_list,
+                topic=kafka_config.get('topic', ''),
+                group_id=kafka_config.get('group_id', 'behave_tests_group'),
+                ssl_enabled=kafka_config.get('ssl_enabled', 'false').lower() == 'true',
+                timeout=int(kafka_config.get('timeout', 30))
+            )
+        except (KeyError, ValueError) as e:
+            raise ConfigurationError(f"Invalid Kafka configuration: {str(e)}",
+                                   config_key="kafka")
     
     def print_environment_status(self) -> None:
         """Print status of required environment variables for debugging."""
