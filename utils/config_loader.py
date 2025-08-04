@@ -333,22 +333,49 @@ class ConfigLoader:
             raise ConfigurationError(f"Invalid AWS configuration: {str(e)}",
                                    config_key="AWS")
         
-    def get_api_config(self) -> APIConfig:
-        """Get API configuration."""
-        try:
-            config = self.load_config_file("config.ini")
-            api_config = config.get('API', {})
+    def get_api_config(self, config_name: str) -> APIConfig:
+        """
+        Get API configuration for a specific name.
+        
+        Args:
+            config_name: The name of the API configuration section in config.ini.
             
+        Returns:
+            APIConfig object
+        """
+        try:
+            # We assume API configs are sections like 'API_petstore'
+            section_name = f"API_{config_name.upper()}"
+            
+            config = self.load_config_file("config.ini")
+            api_config = config.get(section_name, {})
+            
+            if not api_config:
+                raise ConfigurationError(
+                    f"API configuration section '{section_name}' not found.",
+                    config_key=section_name
+                )
+            
+            # Token will be resolved from env if it matches the pattern
+            token = api_config.get('token', '')
+            
+            if not token:
+                # Assuming all API configs require a token for simplicity
+                raise ConfigurationError(
+                    f"API token not found in '{section_name}'.",
+                    config_key=f"{section_name}.token"
+                )
+                
             return APIConfig(
                 base_url=api_config.get('base_url', 'http://localhost:8080'),
-                token=api_config.get('token', ''),  # Can be direct value or env var
+                token=token,
                 timeout=int(api_config.get('timeout', '30')),
                 retry_count=int(api_config.get('retry_count', '3')),
                 verify_ssl=api_config.get('verify_ssl', 'true').lower() == 'true'
             )
-        except ValueError as e:
-            raise ConfigurationError(f"Invalid API configuration: {str(e)}",
-                                   config_key="API")
+        except (ValueError, KeyError) as e:
+            raise ConfigurationError(f"Invalid API configuration for '{config_name}': {str(e)}",
+                                   config_key=f"API_{config_name.upper()}")
         
     def get_mq_config(self) -> MQConfig:
         """Get MQ configuration."""

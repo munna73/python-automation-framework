@@ -132,3 +132,15 @@ class TimeoutError(AutomationFrameworkError):
         details = {"timeout_seconds": timeout_seconds, "operation": operation}
         details.update(kwargs)
         super().__init__(message, details)
+
+
+class ValidationError(AutomationFrameworkError):
+    """Raised when a schema validation fails."""
+
+    def __init__(self, message: str, schema: Optional[str] = None, data: Optional[Any] = None, **kwargs):
+        details = {
+            "schema": schema,
+            "data_sample": str(data)[:200] if data else None
+        }
+        details.update(kwargs)
+        super().__init__(message, details)
