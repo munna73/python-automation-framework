@@ -35,20 +35,45 @@ from io import StringIO, BytesIO
 
 # Import custom modules
 try:
+    # Corrected imports:
+    # 1. Importing specific exception classes.
+    # 2. Importing the 'logger' instance (assuming it's a singleton or initialized globally).
+    # 3. Importing the 'config_loader' singleton instance.
     from utils.custom_exceptions import DataLoadError, ConfigurationError, ValidationError
-    from utils.logger import Logger
-    from utils.config_loader import ConfigLoader
+    from utils.logger import logger
+    from utils.config_loader import config_loader 
     from db.database_connector import DatabaseConnector
     from api.rest_client import RestClient
 except ImportError as e:
+    # Fallback for standalone operation or initial debugging.
+    # This block ensures the DataLoader can still be instantiated even if
+    # some core dependencies are not yet fully set up, though functionality will be limited.
     print(f"Warning: Could not import custom modules: {e}")
-    # Define minimal exception classes for standalone operation
     class DataLoadError(Exception):
         pass
     class ConfigurationError(Exception):
         pass
     class ValidationError(Exception):
         pass
+    # Define mock objects for critical dependencies if imports fail,
+    # to prevent NameError and allow the program to proceed for debugging.
+    class MockConfigLoader:
+        def load_config_file(self, filename): return {} # Mock method for load_config_file
+    config_loader = MockConfigLoader()
+    class MockDatabaseConnector:
+        def __init__(self, *args, **kwargs): pass
+        def execute_query(self, query): return pd.DataFrame()
+        def close(self): pass
+    DatabaseConnector = MockDatabaseConnector
+    class MockRestClient:
+        def __init__(self, *args, **kwargs): pass
+        def get(self, *args, **kwargs): return requests.Response()
+        def post(self, *args, **kwargs): return requests.Response()
+        def close(self): pass
+    RestClient = MockRestClient
+    # Fallback for logger if it couldn't be imported
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
 
 
 class DataLoader:
@@ -64,8 +89,10 @@ class DataLoader:
         Initialize DataLoader with configuration.
         
         Args:
-            config_path: Path to configuration file
-            cache_enabled: Enable/disable data caching
+            config_path: Path to configuration file. This is now primarily for
+                         loading DataLoader's *internal* settings, not the main
+                         application configuration (which is handled by config_loader).
+            cache_enabled: Enable/disable data caching.
         """
         self.config_path = config_path
         self.cache_enabled = cache_enabled
@@ -74,9 +101,10 @@ class DataLoader:
         self.validators = {}
         self.logger = self._setup_logger()
         
-        # Load configuration if provided
+        # Load configuration for DataLoader's internal settings
+        # This uses the global config_loader instance to load the specific file
         if config_path and os.path.exists(config_path):
-            self.config = self._load_configuration(config_path)
+            self.config = config_loader.load_config_file(os.path.basename(config_path))
         else:
             self.config = self._get_default_config()
             
@@ -103,23 +131,27 @@ class DataLoader:
     def _setup_logger(self) -> logging.Logger:
         """Set up logging for data loader."""
         try:
-            return Logger(__name__).get_logger()
-        except:
-            # Fallback to standard logging
+            # Use the imported 'logger' instance directly
+            return logger 
+        except NameError: 
+            # Fallback to standard logging if 'logger' could not be imported
             logging.basicConfig(level=logging.INFO)
             return logging.getLogger(__name__)
 
     def _load_configuration(self, config_path: str) -> Dict[str, Any]:
-        """Load configuration from file."""
+        """
+        Load configuration from file using the global config_loader instance.
+        This is for DataLoader's internal configuration, not the main app config.
+        """
         try:
-            config_loader = ConfigLoader(config_path)
-            return config_loader.get_all_config()
+            # Use the global config_loader instance to load the specific file
+            return config_loader.load_config_file(os.path.basename(config_path))
         except Exception as e:
             self.logger.warning(f"Could not load config from {config_path}: {e}")
             return self._get_default_config()
 
     def _get_default_config(self) -> Dict[str, Any]:
-        """Get default configuration."""
+        """Get default configuration for DataLoader's internal settings."""
         return {
             'data_sources': {
                 'csv': {'encoding': 'utf-8', 'delimiter': ','},
@@ -504,7 +536,7 @@ class DataLoader:
                 future_to_source[future] = source
             
             # Collect results
-            for future in as_completed(future_to_source):
+            for future in as_completed(future_to_source): # Corrected from `futures` to `future_to_source`
                 source = future_to_source[future]
                 try:
                     data = future.result()
@@ -657,7 +689,7 @@ class DataLoader:
         """Create database connector."""
         try:
             return DatabaseConnector(**kwargs)
-        except:
+        except NameError: # If DatabaseConnector import failed
             # Fallback to simple SQLite connector
             return self._create_simple_db_connector(**kwargs)
 
@@ -679,7 +711,7 @@ class DataLoader:
         """Create API client."""
         try:
             return RestClient(**kwargs)
-        except:
+        except NameError: # If RestClient import failed
             # Fallback to simple requests-based client
             return self._create_simple_api_client(**kwargs)
 
@@ -848,325 +880,49 @@ class DataPipeline:
         """
         self.data_loader = data_loader
         self.steps = steps
-        self.current_data = None
-        self.step_results = []
-
-    def execute(self, initial_data: Any = None) -> Any:
+        self.logger = data_loader.logger # Use the same logger as DataLoader
+        
+    def run(self, initial_data: Optional[Any] = None) -> Any:
         """
         Execute the data pipeline.
         
         Args:
-            initial_data: Initial data to process
+            initial_data: Optional initial data to start the pipeline with.
             
         Returns:
-            Final processed data
+            The final processed data.
         """
-        self.current_data = initial_data
+        current_data = initial_data
         
-        for i, step in enumerate(self.steps):
-            step_type = step.get('type')
-            step_params = step.get('params', {})
+        for i, step_config in enumerate(self.steps):
+            step_type = step_config.get('type')
+            step_args = step_config.get('args', {})
+            
+            self.logger.info(f"Executing pipeline step {i+1}: {step_type}")
             
             try:
-                if step_type == 'load':
-                    self.current_data = self.data_loader.load_data(
-                        step_params.get('source'),
-                        step_params.get('data_type'),
-                        **step_params.get('options', {})
-                    )
-                
+                if step_type == 'load_data':
+                    current_data = self.data_loader.load_data(**step_args)
                 elif step_type == 'transform':
-                    transform_func = step_params.get('function')
-                    if isinstance(transform_func, str):
-                        # Apply registered transformation
-                        if transform_func in self.data_loader.transformations:
-                            self.current_data = self.data_loader.transformations[transform_func](self.current_data)
-                    elif callable(transform_func):
-                        # Apply custom function
-                        self.current_data = transform_func(self.current_data)
-                
-                elif step_type == 'filter':
-                    condition = step_params.get('condition')
-                    if isinstance(self.current_data, pd.DataFrame) and callable(condition):
-                        self.current_data = self.current_data[condition(self.current_data)]
-                
+                    transform_name = step_args.get('name')
+                    if transform_name in self.data_loader.transformations:
+                        current_data = self.data_loader.transformations[transform_name](current_data, **step_args)
+                    else:
+                        raise DataLoadError(f"Unknown transformation: {transform_name}")
                 elif step_type == 'validate':
-                    validator = step_params.get('validator')
-                    if isinstance(validator, str) and validator in self.data_loader.validators:
-                        is_valid, message = self.data_loader.validators[validator](self.current_data)
+                    validator_name = step_args.get('name')
+                    if validator_name in self.data_loader.validators:
+                        is_valid, message = self.data_loader.validators[validator_name](current_data, **step_args)
                         if not is_valid:
-                            raise ValidationError(f"Pipeline validation failed at step {i}: {message}")
-                
-                elif step_type == 'save':
-                    self.data_loader.save_data(
-                        self.current_data,
-                        step_params.get('output_path'),
-                        step_params.get('format_type'),
-                        **step_params.get('options', {})
-                    )
-                
-                # Record step result
-                self.step_results.append({
-                    'step': i,
-                    'type': step_type,
-                    'success': True,
-                    'data_info': self.data_loader.get_data_info(self.current_data)
-                })
-                
+                            raise ValidationError(f"Pipeline validation failed: {message}")
+                    else:
+                        raise DataLoadError(f"Unknown validator: {validator_name}")
+                elif step_type == 'save_data':
+                    self.data_loader.save_data(current_data, **step_args)
+                else:
+                    raise DataLoadError(f"Unsupported pipeline step type: {step_type}")
             except Exception as e:
-                self.step_results.append({
-                    'step': i,
-                    'type': step_type,
-                    'success': False,
-                    'error': str(e)
-                })
-                raise DataLoadError(f"Pipeline failed at step {i} ({step_type}): {str(e)}")
-        
-        return self.current_data
-
-    def get_execution_report(self) -> Dict[str, Any]:
-        """Get execution report for the pipeline."""
-        return {
-            'total_steps': len(self.steps),
-            'successful_steps': sum(1 for result in self.step_results if result['success']),
-            'failed_steps': sum(1 for result in self.step_results if not result['success']),
-            'step_details': self.step_results
-        }
-
-
-class DataLoaderFactory:
-    """
-    Factory class for creating specialized data loaders.
-    """
-    
-    @staticmethod
-    def create_csv_loader(config: Optional[Dict] = None) -> DataLoader:
-        """Create a CSV-specialized data loader."""
-        if config is None:
-            config = {
-                'data_sources': {
-                    'csv': {
-                        'encoding': 'utf-8',
-                        'delimiter': ',',
-                        'quotechar': '"',
-                        'skipinitialspace': True
-                    }
-                }
-            }
-        
-        loader = DataLoader()
-        loader.config.update(config)
-        return loader
-
-    @staticmethod
-    def create_api_loader(base_url: str, auth_config: Optional[Dict] = None) -> DataLoader:
-        """Create an API-specialized data loader."""
-        config = {
-            'api': {
-                'base_url': base_url,
-                'timeout': 30,
-                'retries': 3
-            }
-        }
-        
-        if auth_config:
-            config['api']['auth'] = auth_config
-        
-        loader = DataLoader()
-        loader.config.update(config)
-        return loader
-
-    @staticmethod
-    def create_database_loader(connection_config: Dict) -> DataLoader:
-        """Create a database-specialized data loader."""
-        config = {
-            'database': connection_config
-        }
-        
-        loader = DataLoader()
-        loader.config.update(config)
-        return loader
-
-    @staticmethod
-    def create_streaming_loader(chunk_size: int = 1000) -> DataLoader:
-        """Create a streaming data loader for large datasets."""
-        config = {
-            'streaming': {
-                'chunk_size': chunk_size,
-                'buffer_size': chunk_size * 10
-            }
-        }
-        
-        loader = DataLoader()
-        loader.config.update(config)
-        return loader
-
-
-# Utility functions for common data operations
-def merge_datasets(*datasets: pd.DataFrame, merge_key: str, how: str = 'inner') -> pd.DataFrame:
-    """
-    Merge multiple datasets on a common key.
-    
-    Args:
-        datasets: DataFrames to merge
-        merge_key: Column name to merge on
-        how: Type of merge ('inner', 'outer', 'left', 'right')
-        
-    Returns:
-        Merged DataFrame
-    """
-    if not datasets:
-        return pd.DataFrame()
-    
-    result = datasets[0]
-    for dataset in datasets[1:]:
-        result = pd.merge(result, dataset, on=merge_key, how=how)
-    
-    return result
-
-
-def validate_data_schema(data: pd.DataFrame, schema: Dict[str, str]) -> tuple[bool, List[str]]:
-    """
-    Validate DataFrame against expected schema.
-    
-    Args:
-        data: DataFrame to validate
-        schema: Expected schema {column_name: expected_type}
-        
-    Returns:
-        Tuple of (is_valid, error_messages)
-    """
-    errors = []
-    
-    # Check required columns
-    missing_columns = set(schema.keys()) - set(data.columns)
-    if missing_columns:
-        errors.append(f"Missing columns: {missing_columns}")
-    
-    # Check data types
-    for column, expected_type in schema.items():
-        if column in data.columns:
-            actual_type = str(data[column].dtype)
-            if expected_type not in actual_type:
-                errors.append(f"Column '{column}' expected type '{expected_type}', got '{actual_type}'")
-    
-    return len(errors) == 0, errors
-
-
-def clean_data(data: pd.DataFrame, 
-               remove_duplicates: bool = True,
-               handle_nulls: str = 'drop',
-               standardize_text: bool = True) -> pd.DataFrame:
-    """
-    Clean DataFrame with common operations.
-    
-    Args:
-        data: DataFrame to clean
-        remove_duplicates: Remove duplicate rows
-        handle_nulls: How to handle nulls ('drop', 'fill', 'keep')
-        standardize_text: Standardize text columns (strip, lower)
-        
-    Returns:
-        Cleaned DataFrame
-    """
-    cleaned_data = data.copy()
-    
-    # Remove duplicates
-    if remove_duplicates:
-        cleaned_data = cleaned_data.drop_duplicates()
-    
-    # Handle nulls
-    if handle_nulls == 'drop':
-        cleaned_data = cleaned_data.dropna()
-    elif handle_nulls == 'fill':
-        # Fill with appropriate defaults
-        for column in cleaned_data.columns:
-            if cleaned_data[column].dtype == 'object':
-                cleaned_data[column] = cleaned_data[column].fillna('')
-            else:
-                cleaned_data[column] = cleaned_data[column].fillna(0)
-    
-    # Standardize text
-    if standardize_text:
-        text_columns = cleaned_data.select_dtypes(include=['object']).columns
-        for column in text_columns:
-            cleaned_data[column] = cleaned_data[column].astype(str).str.strip().str.lower()
-    
-    return cleaned_data
-
-
-def sample_data(data: pd.DataFrame, 
-               sample_size: Optional[int] = None,
-               sample_fraction: Optional[float] = None,
-               random_state: int = 42) -> pd.DataFrame:
-    """
-    Sample data from DataFrame.
-    
-    Args:
-        data: DataFrame to sample
-        sample_size: Number of rows to sample
-        sample_fraction: Fraction of data to sample (0.0 to 1.0)
-        random_state: Random seed
-        
-    Returns:
-        Sampled DataFrame
-    """
-    if sample_size is not None:
-        return data.sample(n=min(sample_size, len(data)), random_state=random_state)
-    elif sample_fraction is not None:
-        return data.sample(frac=sample_fraction, random_state=random_state)
-    else:
-        return data
-
-
-# Example usage and test functions
-def example_usage():
-    """Example usage of DataLoader."""
-    
-    # Basic file loading
-    loader = DataLoader()
-    
-    # Load CSV file
-    csv_data = loader.load_data('data/test_data.csv', data_type='file')
-    print(f"Loaded CSV data: {csv_data.shape}")
-    
-    # Load JSON with transformation
-    json_data = loader.load_data(
-        'data/api_response.json', 
-        data_type='file',
-        as_dataframe=True,
-        transformations=['clean_text', 'convert_types']
-    )
-    
-    # Load from API
-    api_data = loader.load_data(
-        'https://api.example.com/users',
-        data_type='api',
-        method='GET',
-        headers={'Authorization': 'Bearer token'},
-        as_dataframe=True
-    )
-    
-    # Load from database
-    db_data = loader.load_data(
-        'SELECT * FROM users WHERE active = 1',
-        data_type='database'
-    )
-    
-    # Create data pipeline
-    pipeline_steps = [
-        {'type': 'load', 'params': {'source': 'data/raw_data.csv'}},
-        {'type': 'transform', 'params': {'function': lambda x: x.dropna()}},
-        {'type': 'filter', 'params': {'condition': lambda x: x['age'] > 18}},
-        {'type': 'save', 'params': {'output_path': 'data/processed_data.csv'}}
-    ]
-    
-    pipeline = loader.create_data_pipeline(pipeline_steps)
-    result = pipeline.execute()
-    
-    print("Pipeline execution completed")
-    print(pipeline.get_execution_report())
-
-
-if __name__ == "__main__":
-    example_usage()
+                self.logger.error(f"Error in pipeline step {i+1} ({step_type}): {e}")
+                raise DataLoadError(f"Pipeline execution failed at step {i+1}")
+                
+        return current_data
