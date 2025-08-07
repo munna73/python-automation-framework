@@ -263,21 +263,35 @@ class DatabaseComparisonManager:
             
         logger.info(f"Starting comparison with primary key: {primary_key}")
         
+        # Normalize column names to lowercase for comparison
+        source_df_normalized = self.source_df.copy()
+        target_df_normalized = self.target_df.copy()
+        
+        # Convert all column names to lowercase
+        source_df_normalized.columns = source_df_normalized.columns.str.lower()
+        target_df_normalized.columns = target_df_normalized.columns.str.lower()
+        
+        # Normalize primary key name to lowercase
+        primary_key_lower = primary_key.lower()
+        
+        logger.info(f"Normalized column names - Source: {list(source_df_normalized.columns)}")
+        logger.info(f"Normalized column names - Target: {list(target_df_normalized.columns)}")
+        
         # Ensure primary key exists in both DataFrames
-        if primary_key not in self.source_df.columns:
-            available_cols = list(self.source_df.columns)
-            raise ValueError(f"Primary key '{primary_key}' not found in source DataFrame. Available columns: {available_cols}")
-        if primary_key not in self.target_df.columns:
-            available_cols = list(self.target_df.columns)
-            raise ValueError(f"Primary key '{primary_key}' not found in target DataFrame. Available columns: {available_cols}")
+        if primary_key_lower not in source_df_normalized.columns:
+            available_cols = list(source_df_normalized.columns)
+            raise ValueError(f"Primary key '{primary_key_lower}' not found in source DataFrame. Available columns: {available_cols}")
+        if primary_key_lower not in target_df_normalized.columns:
+            available_cols = list(target_df_normalized.columns)
+            raise ValueError(f"Primary key '{primary_key_lower}' not found in target DataFrame. Available columns: {available_cols}")
         
         # Convert primary key to string to handle mixed types
-        self.source_df[primary_key] = self.source_df[primary_key].astype(str)
-        self.target_df[primary_key] = self.target_df[primary_key].astype(str)
+        source_df_normalized[primary_key_lower] = source_df_normalized[primary_key_lower].astype(str)
+        target_df_normalized[primary_key_lower] = target_df_normalized[primary_key_lower].astype(str)
         
         # Set primary key as index for easier comparison
-        source_indexed = self.source_df.set_index(primary_key)
-        target_indexed = self.target_df.set_index(primary_key)
+        source_indexed = source_df_normalized.set_index(primary_key_lower)
+        target_indexed = target_df_normalized.set_index(primary_key_lower)
         
         # Find missing records
         source_keys = set(source_indexed.index)
@@ -299,29 +313,31 @@ class DatabaseComparisonManager:
             common_source = source_indexed.loc[common_keys]
             common_target = target_indexed.loc[common_keys]
             
-            # Compare each column
-            for col in common_source.columns:
-                if col in common_target.columns:
-                    # Convert to string for comparison to handle mixed types
-                    source_col = common_source[col].astype(str)
-                    target_col = common_target[col].astype(str)
+            # Compare each column (use intersection of columns to handle schema differences)
+            common_columns = set(common_source.columns) & set(common_target.columns)
+            logger.info(f"Comparing {len(common_columns)} common columns: {list(common_columns)}")
+            
+            for col in common_columns:
+                # Convert to string for comparison to handle mixed types
+                source_col = common_source[col].astype(str)
+                target_col = common_target[col].astype(str)
+                
+                # Find differences
+                different_mask = source_col != target_col
+                delta_keys = source_col[different_mask].index.tolist()
+                field_deltas[col] = delta_keys
+                
+                # Store detailed delta information
+                for key in delta_keys:
+                    detailed_deltas.append({
+                        'primary_key': key,
+                        'field': col,
+                        'source_value': source_col[key],
+                        'target_value': target_col[key]
+                    })
                     
-                    # Find differences
-                    different_mask = source_col != target_col
-                    delta_keys = source_col[different_mask].index.tolist()
-                    field_deltas[col] = delta_keys
-                    
-                    # Store detailed delta information
-                    for key in delta_keys:
-                        detailed_deltas.append({
-                            'primary_key': key,
-                            'field': col,
-                            'source_value': source_col[key],
-                            'target_value': target_col[key]
-                        })
-                        
-                    if delta_keys:
-                        logger.debug(f"Field '{col}' has {len(delta_keys)} differences")
+                if delta_keys:
+                    logger.debug(f"Field '{col}' has {len(delta_keys)} differences")
         
         self.comparison_results = {
             'missing_in_target': missing_in_target,
@@ -331,7 +347,10 @@ class DatabaseComparisonManager:
             'total_source_records': len(self.source_df),
             'total_target_records': len(self.target_df),
             'common_records': len(common_keys),
-            'primary_key': primary_key
+            'primary_key': primary_key_lower,
+            'common_columns': list(common_columns) if common_keys else [],
+            'source_only_columns': list(set(source_df_normalized.columns) - set(target_df_normalized.columns)),
+            'target_only_columns': list(set(target_df_normalized.columns) - set(source_df_normalized.columns))
         }
         
         logger.info("Comparison completed successfully")
@@ -529,13 +548,12 @@ class DatabaseComparisonManager:
                 if isinstance(self.oracle_engine, cx_Oracle.Connection):
                     self.oracle_engine.close()
                     logger.debug("Oracle cx_Oracle connection closed")
-                else:
+                elif hasattr(self.oracle_engine, 'dispose'):
                     # Handle SQLAlchemy engines if any
-                    try:
-                        self.oracle_engine.dispose()
-                        logger.debug("Oracle SQLAlchemy engine disposed")
-                    except AttributeError:
-                        logger.debug("Oracle engine has no dispose method, skipping")
+                    self.oracle_engine.dispose()
+                    logger.debug("Oracle SQLAlchemy engine disposed")
+                else:
+                    logger.debug("Oracle engine - no dispose/close method available")
                 self.oracle_engine = None
                 
             # Clean up any separate Oracle connection reference
@@ -558,11 +576,11 @@ class DatabaseComparisonManager:
                 
             # Clean up PostgreSQL connections (SQLAlchemy)
             if self.postgres_engine:
-                try:
+                if hasattr(self.postgres_engine, 'dispose'):
                     self.postgres_engine.dispose()
                     logger.debug("PostgreSQL SQLAlchemy engine disposed")
-                except AttributeError:
-                    logger.debug("PostgreSQL engine has no dispose method, skipping")
+                else:
+                    logger.debug("PostgreSQL engine - no dispose method available")
                 self.postgres_engine = None
                 
         except Exception as e:
