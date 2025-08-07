@@ -4,7 +4,7 @@ Feature: Database Comparison and Data Validation
   So that I can validate data migration and synchronization
 
   Background:
-    Given I load configuration for environment "SAT"
+    Given I load configuration from "config.ini"
 
   @database @oracle @postgres
   Scenario: Basic Oracle to PostgreSQL comparison using config tables
@@ -217,7 +217,7 @@ Feature: Database Comparison and Data Validation
   # Scenarios for different environments
   @database @oracle @dev_environment
   Scenario: Development environment comparison
-    Given I load configuration for environment "DEV"
+    Given I load configuration from "config.ini"
     And I connect to Oracle database using "DEV_ORACLE" configuration
     When I execute direct query "SELECT test_id, test_name, test_result FROM dev_tests" on Oracle as source
     And I validate data quality for source DataFrame
@@ -226,7 +226,7 @@ Feature: Database Comparison and Data Validation
 
   @database @postgres @qa_environment  
   Scenario: QA environment comparison
-    Given I load configuration for environment "QA"
+    Given I load configuration from "config.ini"
     And I connect to PostgreSQL database using "QA_POSTGRES" configuration
     When I execute direct query "SELECT qa_id, test_case, result, executed_by FROM qa_results" on PostgreSQL as source
     And I validate data quality for source DataFrame

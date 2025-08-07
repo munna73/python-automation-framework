@@ -482,17 +482,22 @@ db_comparison_manager = DatabaseComparisonManager()
 
 # Step Definitions
 
-@given('I load configuration for environment "{environment}"')
-def load_configuration_for_environment(context, environment):
-    """Load configuration for specified environment"""
+@given('I load configuration from "{config_file}"')
+def load_configuration_from_file(context, config_file):
+    """Load configuration from specified config file in config directory"""
     try:
-        config_loader = ConfigLoader(active_env=environment.upper())
+        # Initialize ConfigLoader with config directory
+        config_loader = ConfigLoader(config_dir="config")
+        config_loader.load_config_file(config_file)
         db_comparison_manager.set_config_loader(config_loader)
         context.config_loader = config_loader
-        context.current_environment = environment.upper()
-        logger.info(f"Configuration loaded for environment: {environment}")
+        
+        # Verify the config file path
+        config_path = Path("config") / config_file
+        logger.info(f"Configuration loaded from: {config_path}")
+        
     except Exception as e:
-        raise ConfigurationError(f"Failed to load configuration for environment '{environment}': {str(e)}")
+        raise ConfigurationError(f"Failed to load configuration from 'config/{config_file}': {str(e)}")
 
 @given('I connect to Oracle database using "{db_section}" configuration')
 def connect_to_oracle(context, db_section):
