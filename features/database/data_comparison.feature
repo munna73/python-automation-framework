@@ -25,8 +25,10 @@ Feature: Database Comparison and Data Validation
     Given I connect to Oracle database using "SAT_ORACLE" configuration
     And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
     When I read query from config section "queries" key "source_query"
+    And I verify Oracle connection is active
     And I execute query on Oracle and store as source DataFrame
     When I read query from config section "queries" key "target_query"
+    And I verify PostgreSQL connection is active
     And I execute query on PostgreSQL and store as target DataFrame
     And I compare DataFrames using primary key "id"
     Then I print the comparison summary
@@ -232,3 +234,5 @@ Feature: Database Comparison and Data Validation
     And I validate data quality for source DataFrame
     Then I print DataFrame info for source
     And I export source DataFrame to CSV "qa_test_results.csv"
+
+    

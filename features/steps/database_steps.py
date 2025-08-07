@@ -176,24 +176,38 @@ class DatabaseComparisonManager:
         logger.debug("Data cleaning completed")
         return cleaned_df
         
-    def execute_query(self, engine: Any, query: str) -> pd.DataFrame:
+    def execute_query(self, engine: Any, query: str, connection_type: str = "unknown") -> pd.DataFrame:
         """Execute query and return cleaned DataFrame"""
         if engine is None:
-            raise ValueError("Database engine is None. Establish connection first.")
+            raise ValueError(f"Database engine is None for {connection_type}. Establish connection first.")
             
         try:
-            logger.debug(f"Executing query: {query[:100]}{'...' if len(query) > 100 else ''}")
+            logger.debug(f"Executing {connection_type} query: {query[:100]}{'...' if len(query) > 100 else ''}")
             
-            # Execute query with proper CLOB handling
+            # Test connection before executing main query
+            if "oracle" in connection_type.lower():
+                test_query = "SELECT 1 FROM DUAL"
+            else:
+                test_query = "SELECT 1"
+                
+            # Test connection
+            try:
+                test_result = pd.read_sql(text(test_query), engine)
+                logger.debug(f"{connection_type} connection test successful")
+            except Exception as conn_error:
+                logger.error(f"{connection_type} connection test failed: {str(conn_error)}")
+                raise RuntimeError(f"{connection_type} connection lost: {str(conn_error)}")
+            
+            # Execute actual query with proper CLOB handling
             df = pd.read_sql(text(query), engine)
-            logger.info(f"Query executed successfully. Retrieved {len(df)} rows, {len(df.columns)} columns")
+            logger.info(f"{connection_type} query executed successfully. Retrieved {len(df)} rows, {len(df.columns)} columns")
             
             # Clean the data
             cleaned_df = self.clean_data(df)
             return cleaned_df
             
         except Exception as e:
-            error_msg = f"Failed to execute query: {str(e)}"
+            error_msg = f"Failed to execute {connection_type} query: {str(e)}"
             logger.error(error_msg)
             raise RuntimeError(error_msg)
         
@@ -1114,7 +1128,59 @@ def print_target_dataframe_info(context):
         logger.error(f"Failed to print target DataFrame info: {str(e)}")
         raise
 
-# Cleanup function for integration with your environment.py
+# Additional debugging and connection management steps
+
+@when('I verify Oracle connection is active')
+def verify_oracle_connection(context):
+    """Verify Oracle connection is still active"""
+    try:
+        if not hasattr(context, 'oracle_engine') or context.oracle_engine is None:
+            raise ValueError("Oracle connection not established")
+        
+        # Test connection
+        test_df = pd.read_sql("SELECT 1 FROM DUAL", context.oracle_engine)
+        logger.info("Oracle connection verified successfully")
+        
+    except Exception as e:
+        logger.error(f"Oracle connection verification failed: {str(e)}")
+        # Try to reconnect
+        if hasattr(context, 'oracle_section'):
+            logger.info(f"Attempting to reconnect to Oracle using section: {context.oracle_section}")
+            try:
+                context.oracle_engine = db_comparison_manager.get_oracle_connection(context.oracle_section)
+                test_df = pd.read_sql("SELECT 1 FROM DUAL", context.oracle_engine)
+                logger.info("Oracle reconnection successful")
+            except Exception as reconnect_error:
+                logger.error(f"Oracle reconnection failed: {str(reconnect_error)}")
+                raise
+        else:
+            raise
+
+@when('I verify PostgreSQL connection is active')
+def verify_postgres_connection(context):
+    """Verify PostgreSQL connection is still active"""
+    try:
+        if not hasattr(context, 'postgres_engine') or context.postgres_engine is None:
+            raise ValueError("PostgreSQL connection not established")
+        
+        # Test connection
+        test_df = pd.read_sql("SELECT 1", context.postgres_engine)
+        logger.info("PostgreSQL connection verified successfully")
+        
+    except Exception as e:
+        logger.error(f"PostgreSQL connection verification failed: {str(e)}")
+        # Try to reconnect
+        if hasattr(context, 'postgres_section'):
+            logger.info(f"Attempting to reconnect to PostgreSQL using section: {context.postgres_section}")
+            try:
+                context.postgres_engine = db_comparison_manager.get_postgres_connection(context.postgres_section)
+                test_df = pd.read_sql("SELECT 1", context.postgres_engine)
+                logger.info("PostgreSQL reconnection successful")
+            except Exception as reconnect_error:
+                logger.error(f"PostgreSQL reconnection failed: {str(reconnect_error)}")
+                raise
+        else:
+            raise
 def after_scenario(context, scenario):
     """Cleanup after scenario - called from environment.py"""
     try:
@@ -1229,3 +1295,4 @@ def save_comparison_results_as_json(context, filename):
     except Exception as e:
         logger.error(f"Failed to save comparison results as JSON: {str(e)}")
         raise
+    
