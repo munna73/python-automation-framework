@@ -511,9 +511,18 @@ def load_configuration_from_file(context, config_file):
 def connect_to_oracle(context, db_section):
     """Establish connection to Oracle database using specified config section"""
     try:
-        context.oracle_engine = db_comparison_manager.get_oracle_connection(db_section)
+        oracle_engine = db_comparison_manager.get_oracle_connection(db_section)
+        
+        # Test the connection with a simple query
+        test_df = pd.read_sql("SELECT 1 FROM DUAL", oracle_engine)
+        
+        # Store in both context and manager for reuse
+        context.oracle_engine = oracle_engine
         context.oracle_section = db_section
+        
         assert context.oracle_engine is not None, f"Failed to connect to Oracle database using section '{db_section}'"
+        logger.info(f"Oracle connection validated successfully for section: {db_section}")
+        
     except Exception as e:
         logger.error(f"Oracle connection failed: {str(e)}")
         raise
@@ -522,9 +531,18 @@ def connect_to_oracle(context, db_section):
 def connect_to_postgres(context, db_section):
     """Establish connection to PostgreSQL database using specified config section"""
     try:
-        context.postgres_engine = db_comparison_manager.get_postgres_connection(db_section)
+        postgres_engine = db_comparison_manager.get_postgres_connection(db_section)
+        
+        # Test the connection with a simple query
+        test_df = pd.read_sql("SELECT 1", postgres_engine)
+        
+        # Store in both context and manager for reuse
+        context.postgres_engine = postgres_engine
         context.postgres_section = db_section
+        
         assert context.postgres_engine is not None, f"Failed to connect to PostgreSQL database using section '{db_section}'"
+        logger.info(f"PostgreSQL connection validated successfully for section: {db_section}")
+        
     except Exception as e:
         logger.error(f"PostgreSQL connection failed: {str(e)}")
         raise
@@ -553,6 +571,7 @@ def execute_oracle_query_as_source(context):
         if not hasattr(context, 'oracle_engine') or context.oracle_engine is None:
             raise ValueError("Oracle connection not established")
         
+        # Use the oracle_engine from context instead of creating a new one
         db_comparison_manager.source_df = db_comparison_manager.execute_query(
             context.oracle_engine, context.current_query
         )
@@ -577,6 +596,7 @@ def execute_postgres_query_as_source(context):
         if not hasattr(context, 'postgres_engine') or context.postgres_engine is None:
             raise ValueError("PostgreSQL connection not established")
         
+        # Use the postgres_engine from context instead of creating a new one
         db_comparison_manager.source_df = db_comparison_manager.execute_query(
             context.postgres_engine, context.current_query
         )
@@ -601,6 +621,7 @@ def execute_oracle_query_as_target(context):
         if not hasattr(context, 'oracle_engine') or context.oracle_engine is None:
             raise ValueError("Oracle connection not established")
         
+        # Use the oracle_engine from context instead of creating a new one
         db_comparison_manager.target_df = db_comparison_manager.execute_query(
             context.oracle_engine, context.current_query
         )
@@ -625,6 +646,7 @@ def execute_postgres_query_as_target(context):
         if not hasattr(context, 'postgres_engine') or context.postgres_engine is None:
             raise ValueError("PostgreSQL connection not established")
         
+        # Use the postgres_engine from context instead of creating a new one
         db_comparison_manager.target_df = db_comparison_manager.execute_query(
             context.postgres_engine, context.current_query
         )
