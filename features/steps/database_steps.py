@@ -64,7 +64,7 @@ class DatabaseComparisonManager:
         self.config_loader = config_loader
         
     def get_oracle_connection(self, db_section: str) -> Any:
-        """Create Oracle database connection using specified section"""
+        """Create Oracle database connection using specified section with cx_Oracle"""
         if self.config_loader is None:
             raise ValueError("Config loader not initialized")
             
@@ -72,21 +72,38 @@ class DatabaseComparisonManager:
             # Get config section directly using get_custom_config
             db_config = self.config_loader.get_custom_config(db_section)
             
-            # Build Oracle connection string
+            # Build Oracle connection using cx_Oracle directly
             username = db_config['username']
             password = db_config['password']
             host = db_config['host']
-            port = db_config['port']
+            port = int(db_config['port'])
             service_name = db_config.get('service_name', db_config.get('database', ''))
             
-            connection_string = f"{username}/{password}@{host}:{port}/{service_name}"
-            self.oracle_engine = create_engine(f"oracle+cx_oracle://{connection_string}")
-            logger.info(f"Connected to Oracle database using section: {db_section}")
+            # Create DSN for cx_Oracle
+            dsn = cx_Oracle.makedsn(host, port, service_name=service_name)
+            
+            # Create direct cx_Oracle connection
+            self.oracle_connection = cx_Oracle.connect(
+                user=username,
+                password=password,
+                dsn=dsn,
+                encoding="UTF-8"
+            )
+            
+            # Test the connection
+            cursor = self.oracle_connection.cursor()
+            cursor.execute("SELECT 1 FROM DUAL")
+            cursor.fetchone()
+            cursor.close()
+            
+            # Store connection for reuse
+            self.oracle_engine = self.oracle_connection
+            logger.info(f"Connected to Oracle database using cx_Oracle with section: {db_section}")
             return self.oracle_engine
             
         except Exception as e:
             logger.error(f"Failed to connect to Oracle using section {db_section}: {str(e)}")
-            raise ConfigurationError(f"Oracle connection failed: {str(e)}")
+            raise ConfigurationError(f"Oracle cx_Oracle connection failed: {str(e)}")
         
     def get_postgres_connection(self, db_section: str) -> Any:
         """Create PostgreSQL database connection using specified section"""
@@ -97,7 +114,7 @@ class DatabaseComparisonManager:
             # Get config section directly using get_custom_config
             db_config = self.config_loader.get_custom_config(db_section)
             
-            # Build PostgreSQL connection string
+            # Build PostgreSQL connection string (keep SQLAlchemy since it's working)
             username = db_config['username']
             password = db_config['password']
             host = db_config['host']
@@ -184,22 +201,41 @@ class DatabaseComparisonManager:
         try:
             logger.debug(f"Executing {connection_type} query: {query[:100]}{'...' if len(query) > 100 else ''}")
             
-            # Test connection before executing main query
-            if "oracle" in connection_type.lower():
-                test_query = "SELECT 1 FROM DUAL"
-            else:
-                test_query = "SELECT 1"
+            # Handle Oracle cx_Oracle connection vs SQLAlchemy engine
+            if isinstance(engine, cx_Oracle.Connection):
+                # Direct cx_Oracle connection
+                logger.debug(f"Using cx_Oracle direct connection for {connection_type}")
                 
-            # Test connection
-            try:
-                test_result = pd.read_sql(text(test_query), engine)
-                logger.debug(f"{connection_type} connection test successful")
-            except Exception as conn_error:
-                logger.error(f"{connection_type} connection test failed: {str(conn_error)}")
-                raise RuntimeError(f"{connection_type} connection lost: {str(conn_error)}")
+                # Test connection first
+                test_cursor = engine.cursor()
+                test_cursor.execute("SELECT 1 FROM DUAL")
+                test_cursor.fetchone()
+                test_cursor.close()
+                logger.debug(f"{connection_type} cx_Oracle connection test successful")
+                
+                # Execute main query using pandas with cx_Oracle
+                df = pd.read_sql(query, engine)
+                
+            else:
+                # SQLAlchemy engine (PostgreSQL)
+                logger.debug(f"Using SQLAlchemy engine for {connection_type}")
+                
+                # Test connection
+                if "postgres" in connection_type.lower():
+                    test_query = "SELECT 1"
+                else:
+                    test_query = "SELECT 1 FROM DUAL"
+                    
+                try:
+                    test_result = pd.read_sql(text(test_query), engine)
+                    logger.debug(f"{connection_type} SQLAlchemy connection test successful")
+                except Exception as conn_error:
+                    logger.error(f"{connection_type} connection test failed: {str(conn_error)}")
+                    raise RuntimeError(f"{connection_type} connection lost: {str(conn_error)}")
+                
+                # Execute actual query
+                df = pd.read_sql(text(query), engine)
             
-            # Execute actual query with proper CLOB handling
-            df = pd.read_sql(text(query), engine)
             logger.info(f"{connection_type} query executed successfully. Retrieved {len(df)} rows, {len(df.columns)} columns")
             
             # Clean the data
@@ -485,11 +521,30 @@ class DatabaseComparisonManager:
     def cleanup_connections(self) -> None:
         """Clean up database connections"""
         try:
-            if self.oracle_engine:
-                self.oracle_engine.dispose()
-                self.oracle_engine = None
-                logger.debug("Oracle connection cleaned up")
+            # Clean up Oracle connections
+            if hasattr(self, 'oracle_connection') and self.oracle_connection:
+                self.oracle_connection.close()
+                self.oracle_connection = None
+                logger.debug("Oracle connection closed")
                 
+            if hasattr(self, 'oracle_pool') and self.oracle_pool:
+                self.oracle_pool.close()
+                self.oracle_pool = None
+                logger.debug("Oracle connection pool closed")
+                
+            if self.oracle_engine:
+                if isinstance(self.oracle_engine, cx_Oracle.Connection):
+                    self.oracle_engine.close()
+                else:
+                    # Handle other engine types
+                    try:
+                        self.oracle_engine.dispose()
+                    except:
+                        pass
+                self.oracle_engine = None
+                logger.debug("Oracle engine cleaned up")
+                
+            # Clean up PostgreSQL connections
             if self.postgres_engine:
                 self.postgres_engine.dispose()
                 self.postgres_engine = None
@@ -1137,9 +1192,17 @@ def verify_oracle_connection(context):
         if not hasattr(context, 'oracle_engine') or context.oracle_engine is None:
             raise ValueError("Oracle connection not established")
         
-        # Test connection
-        test_df = pd.read_sql("SELECT 1 FROM DUAL", context.oracle_engine)
-        logger.info("Oracle connection verified successfully")
+        # Test cx_Oracle connection
+        if isinstance(context.oracle_engine, cx_Oracle.Connection):
+            cursor = context.oracle_engine.cursor()
+            cursor.execute("SELECT 1 FROM DUAL")
+            result = cursor.fetchone()
+            cursor.close()
+            logger.info("Oracle cx_Oracle connection verified successfully")
+        else:
+            # Fallback for other connection types
+            test_df = pd.read_sql("SELECT 1 FROM DUAL", context.oracle_engine)
+            logger.info("Oracle connection verified successfully")
         
     except Exception as e:
         logger.error(f"Oracle connection verification failed: {str(e)}")
@@ -1148,7 +1211,12 @@ def verify_oracle_connection(context):
             logger.info(f"Attempting to reconnect to Oracle using section: {context.oracle_section}")
             try:
                 context.oracle_engine = db_comparison_manager.get_oracle_connection(context.oracle_section)
-                test_df = pd.read_sql("SELECT 1 FROM DUAL", context.oracle_engine)
+                # Test the new connection
+                if isinstance(context.oracle_engine, cx_Oracle.Connection):
+                    cursor = context.oracle_engine.cursor()
+                    cursor.execute("SELECT 1 FROM DUAL")
+                    cursor.fetchone()
+                    cursor.close()
                 logger.info("Oracle reconnection successful")
             except Exception as reconnect_error:
                 logger.error(f"Oracle reconnection failed: {str(reconnect_error)}")
@@ -1295,4 +1363,3 @@ def save_comparison_results_as_json(context, filename):
     except Exception as e:
         logger.error(f"Failed to save comparison results as JSON: {str(e)}")
         raise
-    
