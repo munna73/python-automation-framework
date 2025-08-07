@@ -220,11 +220,14 @@ class DatabaseComparisonManager:
                 # SQLAlchemy engine (PostgreSQL)
                 logger.debug(f"Using SQLAlchemy engine for {connection_type}")
                 
-                # Test connection
-                if "postgres" in connection_type.lower():
+                # Test connection with appropriate query based on connection type
+                if "postgres" in connection_type.lower() or "postgresql" in connection_type.lower():
                     test_query = "SELECT 1"
-                else:
+                elif "oracle" in connection_type.lower():
                     test_query = "SELECT 1 FROM DUAL"
+                else:
+                    # Default to PostgreSQL format for unknown types
+                    test_query = "SELECT 1"
                     
                 try:
                     test_result = pd.read_sql(text(test_query), engine)
@@ -521,34 +524,46 @@ class DatabaseComparisonManager:
     def cleanup_connections(self) -> None:
         """Clean up database connections"""
         try:
-            # Clean up Oracle connections
-            if hasattr(self, 'oracle_connection') and self.oracle_connection:
-                self.oracle_connection.close()
-                self.oracle_connection = None
-                logger.debug("Oracle connection closed")
-                
-            if hasattr(self, 'oracle_pool') and self.oracle_pool:
-                self.oracle_pool.close()
-                self.oracle_pool = None
-                logger.debug("Oracle connection pool closed")
-                
+            # Clean up Oracle connections (cx_Oracle)
             if self.oracle_engine:
                 if isinstance(self.oracle_engine, cx_Oracle.Connection):
                     self.oracle_engine.close()
+                    logger.debug("Oracle cx_Oracle connection closed")
                 else:
-                    # Handle other engine types
+                    # Handle SQLAlchemy engines if any
                     try:
                         self.oracle_engine.dispose()
-                    except:
-                        pass
+                        logger.debug("Oracle SQLAlchemy engine disposed")
+                    except AttributeError:
+                        logger.debug("Oracle engine has no dispose method, skipping")
                 self.oracle_engine = None
-                logger.debug("Oracle engine cleaned up")
                 
-            # Clean up PostgreSQL connections
+            # Clean up any separate Oracle connection reference
+            if hasattr(self, 'oracle_connection') and self.oracle_connection:
+                try:
+                    self.oracle_connection.close()
+                    logger.debug("Oracle connection reference closed")
+                except:
+                    pass
+                self.oracle_connection = None
+                
+            # Clean up Oracle connection pool if exists
+            if hasattr(self, 'oracle_pool') and self.oracle_pool:
+                try:
+                    self.oracle_pool.close()
+                    logger.debug("Oracle connection pool closed")
+                except:
+                    pass
+                self.oracle_pool = None
+                
+            # Clean up PostgreSQL connections (SQLAlchemy)
             if self.postgres_engine:
-                self.postgres_engine.dispose()
+                try:
+                    self.postgres_engine.dispose()
+                    logger.debug("PostgreSQL SQLAlchemy engine disposed")
+                except AttributeError:
+                    logger.debug("PostgreSQL engine has no dispose method, skipping")
                 self.postgres_engine = None
-                logger.debug("PostgreSQL connection cleaned up")
                 
         except Exception as e:
             logger.warning(f"Error during connection cleanup: {e}")
