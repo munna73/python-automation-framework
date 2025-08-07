@@ -10,6 +10,14 @@ import json
 import time
 import uuid
 from typing import Optional
+import sys
+import os
+from pathlib import Path
+
+# Get project root (go up 3 levels: steps -> features -> project_root)
+current_file = Path(__file__)
+project_root = current_file.parent.parent.parent
+sys.path.insert(0, str(project_root.absolute()))
 
 # SQS Step Definitions
 @given('AWS SQS connection is configured')

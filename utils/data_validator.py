@@ -564,11 +564,11 @@ class SchemaValidator:
         try:
             if db_type.upper() == 'ORACLE':
                 # For Oracle, we need to use the database manager differently
-                results = self.db_manager.execute_sql_query(
+                results = self.db_manager.execute_sql_query( # type: ignore
                     query.replace(':table_name', f"'{table_name.upper()}'"), env, db_type
                 )
             else:
-                results = self.db_manager.execute_sql_query(
+                results = self.db_manager.execute_sql_query( # type: ignore
                     query.replace('%s', f"'{table_name.lower()}'"), env, db_type
                 )
             
@@ -605,7 +605,7 @@ class SchemaValidator:
             """
         
         try:
-            results = self.db_manager.execute_sql_query(query, env, db_type)
+            results = self.db_manager.execute_sql_query(query, env, db_type) # type: ignore
             return results
         except Exception as e:
             logger.error(f"Failed to get index info: {e}")
@@ -631,7 +631,7 @@ class SchemaValidator:
             """
         
         try:
-            results = self.db_manager.execute_sql_query(query, env, db_type)
+            results = self.db_manager.execute_sql_query(query, env, db_type) # type: ignore
             return results
         except Exception as e:
             logger.error(f"Failed to get constraint info: {e}")

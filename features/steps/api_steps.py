@@ -2,10 +2,6 @@
 REST API step definitions for Behave BDD testing.
 """
 from behave import given, when, then
-from api.rest_client import RestClient
-from utils.logger import logger
-from api.json_validator import JsonValidator
-from utils.data_loader import DataLoader
 import json
 import time
 import statistics
@@ -14,6 +10,19 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 from pathlib import Path
 import mimetypes
+import sys
+import os
+from pathlib import Path
+
+# Get project root (go up 3 levels: steps -> features -> project_root)
+current_file = Path(__file__)
+project_root = current_file.parent.parent.parent
+sys.path.insert(0, str(project_root.absolute()))
+
+from api.rest_client import RestClient
+from utils.logger import logger
+from api.json_validator import JsonValidator
+from utils.data_loader import DataLoader
 
 # Initialize REST client
 rest_client = RestClient()

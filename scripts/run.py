@@ -21,7 +21,7 @@ from mq.mq_producer import mq_producer
 from aws.sqs_connector import sqs_connector
 from aws.s3_connector import s3_connector
 from aws.sql_integration import aws_sql_integration
-from utils.config_loader import config_loader
+from utils.config_loader import ConfigLoader
 from utils.logger import logger
 from utils.export_utils import ExportUtils
 

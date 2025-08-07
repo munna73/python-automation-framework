@@ -5,6 +5,16 @@ import time
 import json
 from typing import Dict, List, Any
 from bson import ObjectId
+# Add this to the top of files like base_database_steps.py, mongodb_steps.py, etc.
+import sys
+import os
+from pathlib import Path
+
+# Get project root (go up 4 levels: database -> steps -> features -> project_root)
+current_file = Path(__file__)
+project_root = current_file.parent.parent.parent.parent
+sys.path.insert(0, str(project_root.absolute()))
+
 import re
 
 # Import your existing modules

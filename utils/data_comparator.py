@@ -35,13 +35,46 @@ class DataComparator:
             self.export_utils = None
         self.comparison_results = {}
     
+    def compare_datasets(self,
+                        source_df: pd.DataFrame,
+                        target_df: pd.DataFrame,
+                        key_columns: Optional[Union[str, List[str]]] = None,
+                        exclude_columns: Optional[List[str]] = None,
+                        comparison_name: str = "dataset_comparison",
+                        tolerance: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+        """
+        Compare two datasets (alias for compare_dataframes for backward compatibility).
+        
+        Args:
+            source_df: Source DataFrame
+            target_df: Target DataFrame
+            key_columns: Primary key column(s) for comparison
+            exclude_columns: Columns to exclude from comparison
+            comparison_name: Name for this comparison
+            tolerance: Numeric tolerance for float columns
+            
+        Returns:
+            Comparison results dictionary
+        """
+        db_logger.info(f"Starting dataset comparison: {comparison_name}")
+        
+        # Call the main comparison method
+        return self.compare_dataframes(
+            source_df=source_df,
+            target_df=target_df,
+            key_columns=key_columns,
+            exclude_columns=exclude_columns,
+            comparison_name=comparison_name,
+            tolerance=tolerance
+        )
+
     def compare_dataframes(self,
                           source_df: pd.DataFrame,
                           target_df: pd.DataFrame,
                           key_columns: Optional[Union[str, List[str]]] = None,
                           exclude_columns: Optional[List[str]] = None,
                           comparison_name: str = "comparison",
-                          tolerance: Dict[str, float] = None) -> Dict[str, Any]:
+                          tolerance: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
         """
         Compare two DataFrames and identify differences.
         
@@ -75,8 +108,8 @@ class DataComparator:
             exclude_columns = exclude_columns or []
             
             # Find common columns (excluding excluded ones)
-            common_columns = list(set(source_clean.columns) & set(target_clean.columns))
-            common_columns = [col for col in common_columns if col not in exclude_columns]
+            common_columns_set = set(source_clean.columns) & set(target_clean.columns)
+            common_columns = [str(col) for col in common_columns_set if col not in exclude_columns]
             
             db_logger.info(f"Common columns for comparison: {len(common_columns)}")
             
@@ -208,7 +241,7 @@ class DataComparator:
                 potential_keys = [first_col]
         
         db_logger.info(f"Auto-detected key columns: {potential_keys}")
-        return potential_keys
+        return potential_keys # type: ignore
     
     def _clean_dataframe(self, df: pd.DataFrame, key_columns: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Clean DataFrame and return cleaned data and duplicates."""
@@ -217,6 +250,9 @@ class DataComparator:
                 # Use data_cleaner if available
                 primary_key = key_columns[0]  # Use first key column for duplicate detection
                 clean_df, duplicates_df = data_cleaner.remove_duplicates_with_logging(df, primary_key)
+                # Ensure duplicates_df is a DataFrame
+                if not isinstance(duplicates_df, pd.DataFrame):
+                    duplicates_df = pd.DataFrame()
             else:
                 # Basic cleaning
                 clean_df = df.copy()
@@ -224,7 +260,8 @@ class DataComparator:
                 
                 # Remove duplicates based on key columns if available
                 if key_columns:
-                    duplicates_df = clean_df[clean_df.duplicated(subset=key_columns, keep=False)]
+                    duplicates_mask = clean_df.duplicated(subset=key_columns, keep=False)
+                    duplicates_df = clean_df[duplicates_mask].copy()
                     clean_df = clean_df.drop_duplicates(subset=key_columns, keep='first')
             
             # Normalize column names
@@ -232,7 +269,7 @@ class DataComparator:
             if not duplicates_df.empty:
                 duplicates_df.columns = [col.lower().strip() for col in duplicates_df.columns]
             
-            return clean_df, duplicates_df
+            return clean_df, duplicates_df # type: ignore
             
         except Exception as e:
             db_logger.warning(f"Error during DataFrame cleaning: {e}, using original data")
@@ -243,7 +280,7 @@ class DataComparator:
                          target_df: pd.DataFrame,
                          key_columns: List[str],
                          common_columns: List[str],
-                         tolerance: Dict[str, float] = None) -> pd.DataFrame:
+                         tolerance: Optional[Dict[str, float]] = None) -> pd.DataFrame:
         """Find differences between DataFrames."""
         try:
             if not key_columns:
@@ -340,14 +377,14 @@ class DataComparator:
             # Create composite key for comparison
             if len(key_columns_norm) == 1:
                 key_col = key_columns_norm[0]
-                missing = df1[~df1[key_col].isin(df2[key_col])]
+                missing = df1[~df1[key_col].isin(df2[key_col])].copy()
             else:
                 # For multiple key columns, create a composite key
                 df1_keys = df1[key_columns_norm].apply(lambda x: '|'.join(x.astype(str)), axis=1)
                 df2_keys = df2[key_columns_norm].apply(lambda x: '|'.join(x.astype(str)), axis=1)
-                missing = df1[~df1_keys.isin(df2_keys)]
+                missing = df1[~df1_keys.isin(df2_keys)].copy()
             
-            return missing.copy()
+            return missing # type: ignore
             
         except Exception as e:
             db_logger.error(f"Error finding missing records: {e}")
@@ -357,7 +394,7 @@ class DataComparator:
                       val1: Any,
                       val2: Any,
                       column_name: str,
-                      tolerance: Dict[str, float] = None) -> bool:
+                      tolerance: Optional[Dict[str, float]] = None) -> bool:
         """Check if two values differ, considering tolerance for numeric values."""
         # Handle null values
         if pd.isna(val1) and pd.isna(val2):
@@ -497,14 +534,15 @@ class DataComparator:
             }
             
             # Add difference data as records
-            if not results['differences']['field_differences'].empty:
-                export_data['field_differences'] = results['differences']['field_differences'].to_dict('records')
+            differences = results['differences']
+            if not differences['field_differences'].empty:
+                export_data['field_differences'] = differences['field_differences'].to_dict('records')
             
-            if not results['differences']['missing_in_target'].empty:
-                export_data['missing_in_target'] = results['differences']['missing_in_target'].to_dict('records')
+            if not differences['missing_in_target'].empty:
+                export_data['missing_in_target'] = differences['missing_in_target'].to_dict('records')
             
-            if not results['differences']['missing_in_source'].empty:
-                export_data['missing_in_source'] = results['differences']['missing_in_source'].to_dict('records')
+            if not differences['missing_in_source'].empty:
+                export_data['missing_in_source'] = differences['missing_in_source'].to_dict('records')
             
             with open(filepath, 'w') as f:
                 json.dump(export_data, f, indent=2, default=str)
@@ -546,7 +584,7 @@ class DataComparator:
         
         return data_dict
     
-    def get_comparison_summary(self, comparison_name: str = None) -> Dict[str, Any]:
+    def get_comparison_summary(self, comparison_name: str = None) -> Dict[str, Any]: # type: ignore
         """Get summary of comparison results."""
         if comparison_name:
             if comparison_name in self.comparison_results:

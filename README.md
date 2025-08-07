@@ -272,7 +272,7 @@ Clone the repository.
 Set up a virtual environment.
 
 Install Python dependencies using the requirements.txt file in this project. The required packages are:
-
+pip install behave jsonschema pandas requests boto3 SQLAlchemy pymongo kafka-python PyYAML
 behave
 jsonschema
 pandas

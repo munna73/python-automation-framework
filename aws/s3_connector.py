@@ -14,7 +14,7 @@ from typing import Dict, Any, List, Optional, Union, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from botocore.exceptions import ClientError, NoCredentialsError
 from botocore.config import Config
-from utils.config_loader import config_loader
+from utils.config_loader import ConfigLoader
 from utils.logger import logger
 import time
 

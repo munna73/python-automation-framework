@@ -2,6 +2,14 @@
 MQ-related step definitions for Behave.
 """
 from behave import given, when, then
+import os
+from pathlib import Path
+import sys
+# Get project root (go up 3 levels: steps -> features -> project_root)
+current_file = Path(__file__)
+project_root = current_file.parent.parent.parent
+sys.path.insert(0, str(project_root.absolute()))
+
 from mq.mq_producer import mq_producer
 from utils.logger import logger, mq_logger
 

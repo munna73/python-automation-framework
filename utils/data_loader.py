@@ -40,7 +40,7 @@ try:
     from utils.custom_exceptions import DataLoadError, ConfigurationError, ValidationError
     # Import the logger and config_loader instances (assuming they are singletons)
     from utils.logger import logger
-    from utils.config_loader import config_loader 
+    from utils.config_loader import ConfigLoader 
     from db.database_connector import DatabaseConnector
     from api.rest_client import RestClient
 except ImportError as e:
@@ -636,7 +636,7 @@ class DataLoader:
         
         return result
 
-    def _create_db_connector(self, **kwargs) -> 'DatabaseConnector': # Changed to string literal
+    def _create_db_connector(self, **kwargs) -> 'DatabaseConnector': # type: ignore # Changed to string literal
         """Create database connector."""
         try:
             return DatabaseConnector(**kwargs)
@@ -656,7 +656,7 @@ class DataLoader:
         
         return SimpleDBConnector(kwargs.get('db_path', ':memory:'))
 
-    def _create_api_client(self, **kwargs) -> 'RestClient': # Changed to string literal
+    def _create_api_client(self, **kwargs) -> 'RestClient': # type: ignore # Changed to string literal
         """Create API client."""
         try:
             return RestClient(**kwargs)

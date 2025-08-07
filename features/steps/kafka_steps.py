@@ -9,13 +9,21 @@ import os
 import time
 from behave import given, when, then
 from typing import List, Dict, Any
+import sys
+import os
+from pathlib import Path
+
+# Get project root (go up 3 levels: steps -> features -> project_root)
+current_file = Path(__file__)
+project_root = current_file.parent.parent.parent
+sys.path.insert(0, str(project_root.absolute()))
 
 # Import the new Kafka connector
 try:
     # We are now importing the 'config_loader' object
     from mq.kafka_connector import KafkaConnector
     from utils.logger import logger
-    from utils.config_loader import config_loader
+    from utils.config_loader import ConfigLoader
 except ImportError as e:
     logger.error(f"Import error in kafka_steps.py: {e}")
     raise

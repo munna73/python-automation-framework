@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List, Union
 import json
 from bson import ObjectId
-from utils.config_loader import config_loader
+from utils.config_loader import ConfigLoader
 from utils.logger import logger, db_logger
 
 class MongoDBConnector:

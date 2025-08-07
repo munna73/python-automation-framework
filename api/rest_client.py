@@ -15,7 +15,7 @@ import urllib3
 import mimetypes
 
 # Assuming these are available in your project structure
-from utils.config_loader import config_loader
+from utils.config_loader import ConfigLoader
 from utils.logger import logger
 
 # Disable SSL warnings for test environments

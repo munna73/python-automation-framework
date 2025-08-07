@@ -6,7 +6,7 @@ from typing import Dict, Any, List, Optional
 try:
     from db.database_connector import db_manager
     from db.mongodb_connector import mongodb_connector
-    from utils.config_loader import config_loader
+    from utils.config_loader import ConfigLoader
     from utils.logger import logger, db_logger
 except ImportError as e:
     print(f"Import warning: {e}")
