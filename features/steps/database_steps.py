@@ -69,13 +69,17 @@ class DatabaseComparisonManager:
             raise ValueError("Config loader not initialized")
             
         try:
-            # Extract database type from section name (e.g., SAT_ORACLE -> ORACLE)
-            db_type = db_section.split('_')[-1] if '_' in db_section else db_section
+            # Get config section directly using get_custom_config
+            db_config = self.config_loader.get_custom_config(db_section)
             
-            # Get config using your config loader
-            db_config = self.config_loader.get_database_config(db_type)
-            connection_string = db_config.to_connection_string('ORACLE')
+            # Build Oracle connection string
+            username = db_config['username']
+            password = db_config['password']
+            host = db_config['host']
+            port = db_config['port']
+            service_name = db_config.get('service_name', db_config.get('database', ''))
             
+            connection_string = f"{username}/{password}@{host}:{port}/{service_name}"
             self.oracle_engine = create_engine(f"oracle+cx_oracle://{connection_string}")
             logger.info(f"Connected to Oracle database using section: {db_section}")
             return self.oracle_engine
@@ -90,13 +94,17 @@ class DatabaseComparisonManager:
             raise ValueError("Config loader not initialized")
             
         try:
-            # Extract database type from section name (e.g., SAT_POSTGRES -> POSTGRES)
-            db_type = db_section.split('_')[-1] if '_' in db_section else db_section
+            # Get config section directly using get_custom_config
+            db_config = self.config_loader.get_custom_config(db_section)
             
-            # Get config using your config loader
-            db_config = self.config_loader.get_database_config(db_type)
-            connection_string = db_config.to_connection_string('POSTGRES')
+            # Build PostgreSQL connection string
+            username = db_config['username']
+            password = db_config['password']
+            host = db_config['host']
+            port = db_config['port']
+            database = db_config['database']
             
+            connection_string = f"postgresql://{username}:{password}@{host}:{port}/{database}"
             self.postgres_engine = create_engine(connection_string)
             logger.info(f"Connected to PostgreSQL database using section: {db_section}")
             return self.postgres_engine
