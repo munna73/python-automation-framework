@@ -285,6 +285,118 @@ class DatabaseComparisonManager:
             available_cols = list(target_df_normalized.columns)
             raise ValueError(f"Primary key '{primary_key_lower}' not found in target DataFrame. Available columns: {available_cols}")
         
+        # CRITICAL FIX: Convert all columns to string type for consistent comparison (handles numeric precision issues)
+        source_df_str = source_df_normalized.astype(str)
+        target_df_str = target_df_normalized.astype(str)
+        
+        # Handle numeric precision issues (123456 vs 123456.0) 
+        for col in source_df_str.columns:  # type: ignore
+            # Try to normalize numeric strings by removing trailing .0
+           source_df_str[col] = source_df_str[col].str.replace(r'\.0+$', '', regex=True)  # type: ignore
+           target_df_str[col] = target_df_str[col].str.replace(r'\.0+$', '', regex=True)  # type: ignore
+        
+        # Set primary key as index for easier comparison
+        source_indexed = source_df_str.set_index(primary_key_lower)  # type: ignore
+        target_indexed = target_df_str.set_index(primary_key_lower)  # type: ignore
+        
+        # Find missing records
+        source_keys = set(source_indexed.index)
+        target_keys = set(target_indexed.index)
+        
+        missing_in_target = list(source_keys - target_keys)
+        missing_in_source = list(target_keys - source_keys)
+        common_keys = list(source_keys & target_keys)
+        
+        logger.info(f"Found {len(missing_in_target)} records missing in target")
+        logger.info(f"Found {len(missing_in_source)} records missing in source")
+        logger.info(f"Found {len(common_keys)} common records")
+        
+        # Field-level delta analysis for common records
+        field_deltas = {}
+        detailed_deltas = []
+        
+        if common_keys:
+            common_source = source_indexed.loc[common_keys]
+            common_target = target_indexed.loc[common_keys]
+            
+            # Compare each column (use intersection of columns to handle schema differences)
+            common_columns = set(common_source.columns) & set(common_target.columns)
+            logger.info(f"Comparing {len(common_columns)} common columns: {list(common_columns)}")
+            
+            for col in common_columns:
+                # Already converted to string above, so we can compare directly
+                source_col = common_source[col]
+                target_col = common_target[col]
+                
+                # Find differences
+                different_mask = source_col != target_col
+                delta_keys = source_col[different_mask].index.tolist()
+                field_deltas[col] = delta_keys
+                
+                # Store detailed delta information
+                for key in delta_keys:
+                    detailed_deltas.append({
+                        'primary_key': key,
+                        'field': col,
+                        'source_value': source_col[key],
+                        'target_value': target_col[key]
+                    })
+                    
+                if delta_keys:
+                    logger.debug(f"Field '{col}' has {len(delta_keys)} differences")
+        
+        self.comparison_results = {
+            'missing_in_target': missing_in_target,
+            'missing_in_source': missing_in_source,
+            'field_deltas': field_deltas,
+            'detailed_deltas': detailed_deltas,
+            'total_source_records': len(self.source_df),
+            'total_target_records': len(self.target_df),
+            'common_records': len(common_keys),
+            'primary_key': primary_key_lower,
+            'common_columns': list(common_columns) if common_keys else [],
+            'source_only_columns': list(set(source_df_normalized.columns) - set(target_df_normalized.columns)),
+            'target_only_columns': list(set(target_df_normalized.columns) - set(source_df_normalized.columns))
+        }
+        
+        logger.info("Comparison completed successfully")
+        return self.comparison_results
+
+    def compare_dataframes_v0(self, primary_key: str) -> Dict[str, Any]:
+        """Compare source and target DataFrames based on primary key"""
+        if self.source_df is None:
+            raise ValueError("Source DataFrame is None. Load source data first.")
+        if self.target_df is None:
+            raise ValueError("Target DataFrame is None. Load target data first.")
+        if self.source_df.empty:
+            raise ValueError("Source DataFrame is empty.")
+        if self.target_df.empty:
+            raise ValueError("Target DataFrame is empty.")
+            
+        logger.info(f"Starting comparison with primary key: {primary_key}")
+        
+        # Normalize column names to lowercase for comparison
+        source_df_normalized = self.source_df.copy()
+        target_df_normalized = self.target_df.copy()
+        
+        # Convert all column names to lowercase
+        source_df_normalized.columns = source_df_normalized.columns.str.lower()
+        target_df_normalized.columns = target_df_normalized.columns.str.lower()
+        
+        # Normalize primary key name to lowercase
+        primary_key_lower = primary_key.lower()
+        
+        logger.info(f"Normalized column names - Source: {list(source_df_normalized.columns)}")
+        logger.info(f"Normalized column names - Target: {list(target_df_normalized.columns)}")
+        
+        # Ensure primary key exists in both DataFrames
+        if primary_key_lower not in source_df_normalized.columns:
+            available_cols = list(source_df_normalized.columns)
+            raise ValueError(f"Primary key '{primary_key_lower}' not found in source DataFrame. Available columns: {available_cols}")
+        if primary_key_lower not in target_df_normalized.columns:
+            available_cols = list(target_df_normalized.columns)
+            raise ValueError(f"Primary key '{primary_key_lower}' not found in target DataFrame. Available columns: {available_cols}")
+        
         # Convert primary key to string to handle mixed types
         source_df_normalized[primary_key_lower] = source_df_normalized[primary_key_lower].astype(str)
         target_df_normalized[primary_key_lower] = target_df_normalized[primary_key_lower].astype(str)

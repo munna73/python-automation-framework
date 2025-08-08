@@ -20,19 +20,57 @@ Feature: Database Comparison and Data Validation
     And I export comparison results to CSV file "detailed_comparison.csv"
     And I save comparison results as JSON file "comparison_results.json"
 
-  @database @oracle @postgres @custom_query
-  Scenario: Compare using custom queries from config
+  @database @oracle @postgres @enhanced_comparison
+  Scenario: Enhanced comparison with omit columns and values
     Given I connect to Oracle database using "SAT_ORACLE" configuration
     And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
-    When I read query from config section "queries" key "source_query"
-    And I verify Oracle connection is active
-    And I execute query on Oracle and store as source DataFrame
-    When I read query from config section "queries" key "target_query"
-    And I verify PostgreSQL connection is active
-    And I execute query on PostgreSQL and store as target DataFrame
+    When I execute direct query "SELECT emp_id, name, salary, last_updated, status FROM employees" on Oracle as source
+    And I execute direct query "SELECT emp_id, name, salary, last_updated, status FROM employees" on PostgreSQL as target
+    And I compare DataFrames using primary key "emp_id" omitting columns "last_updated" and values "N,None,NULL,---"
+    Then I print the comparison summary
+    And I export detailed CSV files with base name "enhanced_comparison"
+
+  @database @oracle @postgres @numeric_precision
+  Scenario: Compare with numeric precision handling
+    Given I connect to Oracle database using "SAT_ORACLE" configuration
+    And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
+    When I execute direct query "SELECT id, amount, quantity FROM transactions" on Oracle as source
+    And I execute direct query "SELECT id, amount, quantity FROM transactions" on PostgreSQL as target
     And I compare DataFrames using primary key "id"
     Then I print the comparison summary
-    And I export comparison summary to CSV file "query_comparison_summary.csv"
+    And I export detailed CSV files with base name "numeric_precision_test"
+
+  @database @oracle @postgres @omit_columns_only
+  Scenario: Compare omitting timestamp columns
+    Given I connect to Oracle database using "SAT_ORACLE" configuration
+    And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
+    When I execute direct query "SELECT customer_id, name, created_date, modified_date FROM customers" on Oracle as source
+    And I execute direct query "SELECT customer_id, name, created_date, modified_date FROM customers" on PostgreSQL as target
+    And I compare DataFrames using primary key "customer_id" omitting columns "created_date,modified_date"
+    Then I print the comparison summary
+    And I export detailed CSV files with base name "omit_timestamps"
+
+  @database @oracle @postgres @omit_values_only
+  Scenario: Compare treating NULL variants as equal
+    Given I connect to Oracle database using "SAT_ORACLE" configuration
+    And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
+    When I execute direct query "SELECT product_id, description, category FROM products" on Oracle as source
+    And I execute direct query "SELECT product_id, description, category FROM products" on PostgreSQL as target
+    And I compare DataFrames using primary key "product_id" omitting values "NULL,None,N/A,---,N,NONE"
+    Then I print the comparison summary
+    And I export detailed CSV files with base name "null_variants"
+
+  @database @oracle @postgres @full_audit_comparison
+  Scenario: Full audit comparison with all features
+    Given I connect to Oracle database using "SAT_ORACLE" configuration
+    And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
+    When I load source data using table from config section "comparison_settings" key "SRCE_TABLE" on Oracle
+    And I load target data using table from config section "comparison_settings" key "TRGT_TABLE" on PostgreSQL
+    And I compare DataFrames using primary key from config section "comparison_settings" omitting columns "last_updated_timestamp,created_date" and values "N,None,NULL,---,INACTIVE,inactive"
+    Then I print the comparison summary
+    And I export detailed CSV files with base name "full_audit"
+    And I export all results to Excel file "full_audit_complete.xlsx"
+    And I save comparison results as JSON file "full_audit_results.json"
 
   @database @oracle @direct_query
   Scenario: Oracle to Oracle comparison with direct queries
@@ -234,5 +272,3 @@ Feature: Database Comparison and Data Validation
     And I validate data quality for source DataFrame
     Then I print DataFrame info for source
     And I export source DataFrame to CSV "qa_test_results.csv"
-
-    
