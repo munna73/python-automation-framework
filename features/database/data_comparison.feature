@@ -272,3 +272,64 @@ Feature: Database Comparison and Data Validation
     And I validate data quality for source DataFrame
     Then I print DataFrame info for source
     And I export source DataFrame to CSV "qa_test_results.csv"
+
+    # Feature file examples using the enhanced comparison steps
+
+Feature: Enhanced Database Comparison with Omit Options
+  As a data engineer
+  I want to compare data while omitting specific columns and values
+  So that I can focus on meaningful differences
+
+  Background:
+    Given I load configuration from "config.ini"
+    And I connect to Oracle database using "SAT_ORACLE" configuration
+    And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
+
+  @database @basic_comparison
+  Scenario: Basic comparison without omissions
+    When I execute direct query "SELECT emp_id, name, salary, created_date FROM employees" on Oracle as source
+    And I execute direct query "SELECT emp_id, name, salary, created_date FROM employees" on PostgreSQL as target
+    And I compare DataFrames using primary key "emp_id"
+    Then I print the comparison summary
+
+  @database @omit_columns
+  Scenario: Compare while omitting timestamp columns
+    When I execute direct query "SELECT emp_id, name, salary, created_date, modified_date FROM employees" on Oracle as source
+    And I execute direct query "SELECT emp_id, name, salary, created_date, modified_date FROM employees" on PostgreSQL as target
+    And I compare DataFrames using primary key "emp_id" omitting columns "created_date,modified_date"
+    Then I print the comparison summary
+    And I export all results to Excel file "omit_columns_comparison.xlsx"
+
+  @database @omit_values
+  Scenario: Compare treating NULL variants as equal
+    When I execute direct query "SELECT product_id, name, description, status FROM products" on Oracle as source
+    And I execute direct query "SELECT product_id, name, description, status FROM products" on PostgreSQL as target
+    And I compare DataFrames using primary key "product_id" omitting values "NaN,---,None,NULL,null"
+    Then I print the comparison summary
+    And I export detailed CSV files with base name "omit_values_comparison"
+
+  @database @omit_both
+  Scenario: Compare omitting both columns and values
+    When I execute direct query "SELECT customer_id, name, email, status, created_date, notes FROM customers" on Oracle as source
+    And I execute direct query "SELECT customer_id, name, email, status, created_date, notes FROM customers" on PostgreSQL as target
+    And I compare DataFrames using primary key "customer_id" omitting columns "created_date,notes" and values "NaN,---,None,NULL,N/A"
+    Then I print the comparison summary
+    And there should be no missing records in either DataFrame
+    And I export all results to Excel file "comprehensive_comparison.xlsx"
+
+  @database @audit_fields_omit
+  Scenario: Production data validation omitting audit fields
+    When I execute direct query "SELECT order_id, customer_id, amount, status, created_by, created_date, modified_by, modified_date FROM orders" on Oracle as source
+    And I execute direct query "SELECT order_id, customer_id, amount, status, created_by, created_date, modified_by, modified_date FROM orders" on PostgreSQL as target
+    And I compare DataFrames using primary key "order_id" omitting columns "created_by,created_date,modified_by,modified_date" and values "SYSTEM,---,NULL,None"
+    Then I print the comparison summary
+    And I save comparison results as JSON file "production_audit_results.json"
+
+  @database @numeric_precision_test
+  Scenario: Test numeric precision handling with omit values
+    When I execute direct query "SELECT account_id, balance, interest_rate, status FROM accounts" on Oracle as source
+    And I execute direct query "SELECT account_id, balance, interest_rate, status FROM accounts" on PostgreSQL as target
+    And I compare DataFrames using primary key "account_id" omitting values "0.0,0,---,inactive,INACTIVE"
+    Then I print the comparison summary
+    And field "balance" should have "0" delta records
+    And I export comparison results to CSV file "numeric_precision_test.csv"

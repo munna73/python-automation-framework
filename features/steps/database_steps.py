@@ -13,7 +13,7 @@ from openpyxl.styles import Font, PatternFill
 import json
 from pathlib import Path
 from datetime import datetime
-
+from typing import Optional, List, Dict, Any
 # Import your existing config loader
 from utils.config_loader import ConfigLoader
 from utils.custom_exceptions import ConfigurationError
@@ -249,8 +249,189 @@ class DatabaseComparisonManager:
             error_msg = f"Failed to execute {connection_type} query: {str(e)}"
             logger.error(error_msg)
             raise RuntimeError(error_msg)
+   
+    def compare_dataframes(self, primary_key: str, omit_columns: Optional[List[str]] = None, omit_values: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Compare source and target DataFrames based on primary key with omit options
         
-    def compare_dataframes(self, primary_key: str) -> Dict[str, Any]:
+        Args:
+            primary_key (str): The column name to use as primary key for comparison
+            omit_columns (Optional[List[str]]): List of column names to exclude from comparison
+            omit_values (Optional[List[str]]): List of values to treat as equal (e.g., ['NaN', '---', 'None'])
+        
+        Returns:
+            Dict[str, Any]: Comparison results with missing records and field deltas
+        """
+        if self.source_df is None:
+            raise ValueError("Source DataFrame is None. Load source data first.")
+        if self.target_df is None:
+            raise ValueError("Target DataFrame is None. Load target data first.")
+        if self.source_df.empty:
+            raise ValueError("Source DataFrame is empty.")
+        if self.target_df.empty:
+            raise ValueError("Target DataFrame is empty.")
+            
+        logger.info(f"Starting comparison with primary key: {primary_key}")
+        if omit_columns:
+            logger.info(f"Omitting columns from comparison: {omit_columns}")
+        if omit_values:
+            logger.info(f"Treating these values as equal: {omit_values}")
+        
+        # Normalize column names to lowercase for comparison
+        source_df_normalized = self.source_df.copy()
+        target_df_normalized = self.target_df.copy()
+        
+        # Convert all column names to lowercase
+        source_df_normalized.columns = source_df_normalized.columns.str.lower()
+        target_df_normalized.columns = target_df_normalized.columns.str.lower()
+        
+        # Normalize primary key name to lowercase
+        primary_key_lower = primary_key.lower()
+        
+        logger.info(f"Normalized column names - Source: {list(source_df_normalized.columns)}")
+        logger.info(f"Normalized column names - Target: {list(target_df_normalized.columns)}")
+        
+        # Validate that both DataFrames have common columns
+        source_columns = set(source_df_normalized.columns)
+        target_columns = set(target_df_normalized.columns)
+        common_columns = source_columns & target_columns
+        
+        if not common_columns:
+            raise ValueError("No common columns found between source and target DataFrames")
+            
+        # Filter to common columns only
+        source_df_filtered = source_df_normalized[list(common_columns)].copy()
+        target_df_filtered = target_df_normalized[list(common_columns)].copy()
+        
+        # Ensure primary key exists in both DataFrames
+        if primary_key_lower not in source_df_filtered.columns:
+            available_cols = list(source_df_filtered.columns)
+            raise ValueError(f"Primary key '{primary_key_lower}' not found in source DataFrame. Available columns: {available_cols}")
+        if primary_key_lower not in target_df_filtered.columns:
+            available_cols = list(target_df_filtered.columns)
+            raise ValueError(f"Primary key '{primary_key_lower}' not found in target DataFrame. Available columns: {available_cols}")
+        
+        # CRITICAL FIX: Convert all columns to string type for consistent comparison (handles numeric precision issues)
+        source_df_str = source_df_filtered.astype(str)
+        target_df_str = target_df_filtered.astype(str)
+        
+        # Handle numeric precision issues (123456 vs 123456.0) 
+        for col in source_df_str.columns:  # type: ignore
+            # Try to normalize numeric strings by removing trailing .0
+            source_df_str[col] = source_df_str[col].str.replace(r'\.0+$', '', regex=True)  # type: ignore
+            target_df_str[col] = target_df_str[col].str.replace(r'\.0+$', '', regex=True)  # type: ignore
+        
+        # Find missing records using primary key
+        source_keys = set(source_df_str[primary_key_lower])
+        target_keys = set(target_df_str[primary_key_lower])
+        
+        missing_in_target = list(source_keys - target_keys)
+        missing_in_source = list(target_keys - source_keys)
+        common_keys = list(source_keys & target_keys)
+        
+        logger.info(f"Found {len(missing_in_target)} records missing in target")
+        logger.info(f"Found {len(missing_in_source)} records missing in source")
+        logger.info(f"Found {len(common_keys)} common records")
+        
+        # Set primary key as index for easier comparison
+        source_indexed = source_df_str.set_index(primary_key_lower)  # type: ignore
+        target_indexed = target_df_str.set_index(primary_key_lower)  # type: ignore
+        
+        # Determine columns to compare (exclude primary key and omit_columns)
+        columns_to_compare = [col for col in common_columns if col != primary_key_lower]
+        
+        # Handle omit_columns (convert to lowercase and filter out)
+        if omit_columns is not None:
+            omit_columns_lower = {col.lower() for col in omit_columns}
+            columns_to_compare = [col for col in columns_to_compare if col not in omit_columns_lower]
+            logger.info(f"After omitting columns, comparing: {columns_to_compare}")
+        
+        # Prepare omit_values for case-insensitive comparison
+        omit_values_lower = set()
+        if omit_values is not None:
+            omit_values_lower = {str(val).lower() for val in omit_values}
+        
+        # Field-level delta analysis for common records
+        field_deltas = {}
+        detailed_deltas = []
+        
+        if common_keys and columns_to_compare:
+            common_source = source_indexed.loc[common_keys]
+            common_target = target_indexed.loc[common_keys]
+            
+            logger.info(f"Comparing {len(columns_to_compare)} columns: {columns_to_compare}")
+            
+            for col in columns_to_compare:
+                delta_keys = []
+                
+                for key in common_keys:
+                    source_val = str(common_source.loc[key, col])
+                    target_val = str(common_target.loc[key, col])
+                    
+                    # Normalize for omit_values comparison (case-insensitive)
+                    source_val_norm = source_val.lower()
+                    target_val_norm = target_val.lower()
+                    
+                    # Check if both values are in omit_values (treat as equal)
+                    is_omitted_pair = (source_val_norm in omit_values_lower and 
+                                    target_val_norm in omit_values_lower)
+                    
+                    # Compare values
+                    if source_val != target_val and not is_omitted_pair:
+                        delta_keys.append(key)
+                        detailed_deltas.append({
+                            'primary_key': key,
+                            'field': col,
+                            'source_value': source_val,
+                            'target_value': target_val
+                        })
+                
+                field_deltas[col] = delta_keys
+                if delta_keys:
+                    logger.debug(f"Field '{col}' has {len(delta_keys)} differences")
+        
+        # Create missing records details for export
+        missing_records_details = []
+        
+        # Add missing in target
+        for missing_id in missing_in_target:
+            missing_records_details.append({
+                'primary_key': missing_id,
+                'missing_in': 'Target',
+                'table_name': 'target_table'
+            })
+        
+        # Add missing in source  
+        for missing_id in missing_in_source:
+            missing_records_details.append({
+                'primary_key': missing_id,
+                'missing_in': 'Source',
+                'table_name': 'source_table'
+            })
+        
+        # Store comprehensive comparison results
+        self.comparison_results = {
+            'missing_in_target': missing_in_target,
+            'missing_in_source': missing_in_source,
+            'missing_records_details': missing_records_details,
+            'field_deltas': field_deltas,
+            'detailed_deltas': detailed_deltas,
+            'total_source_records': len(self.source_df),
+            'total_target_records': len(self.target_df),
+            'common_records': len(common_keys),
+            'primary_key': primary_key_lower,
+            'common_columns': list(common_columns),
+            'columns_compared': columns_to_compare,
+            'omitted_columns': omit_columns or [],
+            'omitted_values': omit_values or [],
+            'source_only_columns': list(source_columns - target_columns),
+            'target_only_columns': list(target_columns - source_columns)
+        }
+        
+        logger.info("Comparison completed successfully")
+        return self.comparison_results
+    
+    def compare_dataframes_v1(self, primary_key: str) -> Dict[str, Any]:
         """Compare source and target DataFrames based on primary key"""
         if self.source_df is None:
             raise ValueError("Source DataFrame is None. Load source data first.")
@@ -564,139 +745,230 @@ class DatabaseComparisonManager:
             missing_df.to_excel(writer, sheet_name='Missing_Records', index=False)
     
     def export_to_csv(self, filename: str, export_type: str = 'summary') -> None:
-        """Export results to CSV with different options"""
-        logger.info(f"Exporting {export_type} to CSV: {filename}")
+        """Export results to CSV with different options and ensure directory exists"""
         
-        if export_type == 'summary':
-            self._export_summary_csv(filename)
-        elif export_type == 'detailed':
-            self._export_detailed_csv(filename)
-        elif export_type == 'source':
-            if self.source_df is not None:
-                self.source_df.to_csv(filename, index=False)
+        # Ensure output directory exists
+        output_dir = Path("data/output")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create full path
+        full_path = output_dir / filename
+        
+        logger.info(f"Exporting {export_type} to CSV: {full_path}")
+        
+        try:
+            if export_type == 'summary':
+                self._export_summary_csv(str(full_path))
+            elif export_type == 'detailed':
+                self._export_detailed_csv(str(full_path))
+            elif export_type == 'source':
+                if self.source_df is not None:
+                    self.source_df.to_csv(str(full_path), index=False)
+                    logger.info(f"Source data exported to: {full_path}")
+                else:
+                    raise ValueError("Source DataFrame is None")
+            elif export_type == 'target':
+                if self.target_df is not None:
+                    self.target_df.to_csv(str(full_path), index=False)
+                    logger.info(f"Target data exported to: {full_path}")
+                else:
+                    raise ValueError("Target DataFrame is None")
             else:
-                raise ValueError("Source DataFrame is None")
-        elif export_type == 'target':
-            if self.target_df is not None:
-                self.target_df.to_csv(filename, index=False)
-            else:
-                raise ValueError("Target DataFrame is None")
-        else:
-            raise ValueError(f"Unknown export type: {export_type}")
-    
+                raise ValueError(f"Unknown export type: {export_type}")
+                
+        except Exception as e:
+            logger.error(f"Failed to export {export_type} to {full_path}: {str(e)}")
+            raise
+
     def _export_summary_csv(self, output_path: str) -> None:
         """Export comparison summary to CSV"""
-        if not self.comparison_results:
-            raise ValueError("No comparison results available")
+        try:
+            if not self.comparison_results:
+                raise ValueError("No comparison results available")
+                
+            results = self.comparison_results
+            summary_data = []
             
-        results = self.comparison_results
-        summary_data = []
+            # Add timestamp to summary
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            summary_data.append(['Export Timestamp', timestamp])
+            summary_data.append(['Metric', 'Value'])
+            summary_data.append(['Source Records', results['total_source_records']])
+            summary_data.append(['Target Records', results['total_target_records']])
+            summary_data.append(['Common Records', results['common_records']])
+            summary_data.append(['Missing in Target', len(results['missing_in_target'])])
+            summary_data.append(['Missing in Source', len(results['missing_in_source'])])
+            summary_data.append(['Primary Key', results['primary_key']])
+            summary_data.append(['Common Columns', ', '.join(results['common_columns'])])
+            summary_data.append(['Columns Compared', ', '.join(results['columns_compared'])])
+            summary_data.append(['Omitted Columns', ', '.join(results['omitted_columns'])])
+            summary_data.append(['Omitted Values', ', '.join(results['omitted_values'])])
+            
+            # Add field delta summary
+            total_field_deltas = 0
+            for field, deltas in results['field_deltas'].items():
+                delta_count = len(deltas)
+                total_field_deltas += delta_count
+                summary_data.append([f'Field Deltas - {field}', delta_count])
+            
+            summary_data.append(['Total Field Deltas', total_field_deltas])
+            
+            # Create DataFrame and export
+            summary_df = pd.DataFrame(summary_data)
+            summary_df.to_csv(output_path, index=False, header=False)
+            logger.info(f"Summary exported successfully to: {output_path}")
+            
+        except Exception as e:
+            logger.error(f"Failed to export summary: {str(e)}")
+            raise
         
-        # Add summary statistics
-        summary_data.append(['Metric', 'Value'])
-        summary_data.append(['Source Records', results['total_source_records']])
-        summary_data.append(['Target Records', results['total_target_records']])
-        summary_data.append(['Common Records', results['common_records']])
-        summary_data.append(['Missing in Target', len(results['missing_in_target'])])
-        summary_data.append(['Missing in Source', len(results['missing_in_source'])])
-        summary_data.append(['Primary Key', results['primary_key']])
-        
-        # Add field delta summary
-        for field, deltas in results['field_deltas'].items():
-            summary_data.append([f'Field Deltas - {field}', len(deltas)])
-        
-        summary_df = pd.DataFrame(summary_data)
-        summary_df.to_csv(output_path, index=False, header=False)
     
     def _export_detailed_csv(self, output_path: str) -> None:
         """Export detailed comparison results to CSV"""
-        if not self.comparison_results:
-            raise ValueError("No comparison results available")
-            
-        all_results = []
-        results = self.comparison_results
-        
-        # Add missing records
-        for missing_id in results['missing_in_target']:
-            all_results.append({
-                'Type': 'Missing in Target',
-                'Primary_Key': missing_id,
-                'Field': 'ALL',
-                'Source_Value': 'EXISTS',
-                'Target_Value': 'MISSING'
-            })
-        
-        for missing_id in results['missing_in_source']:
-            all_results.append({
-                'Type': 'Missing in Source',
-                'Primary_Key': missing_id,
-                'Field': 'ALL',
-                'Source_Value': 'MISSING',
-                'Target_Value': 'EXISTS'
-            })
-        
-        # Add field deltas
-        for delta in results.get('detailed_deltas', []):
-            all_results.append({
-                'Type': 'Field Delta',
-                'Primary_Key': delta['primary_key'],
-                'Field': delta['field'],
-                'Source_Value': str(delta['source_value'])[:1000],  # Limit length
-                'Target_Value': str(delta['target_value'])[:1000]
-            })
-        
-        if all_results:
-            results_df = pd.DataFrame(all_results)
-            results_df.to_csv(output_path, index=False)
-        else:
-            # Create empty file with headers
-            pd.DataFrame(columns=['Type', 'Primary_Key', 'Field', 'Source_Value', 'Target_Value']).to_csv(output_path, index=False)
-    
-    def cleanup_connections(self) -> None:
-        """Clean up database connections"""
         try:
-            # Clean up Oracle connections (cx_Oracle)
-            if self.oracle_engine:
-                if isinstance(self.oracle_engine, cx_Oracle.Connection):
-                    self.oracle_engine.close()
-                    logger.debug("Oracle cx_Oracle connection closed")
-                elif hasattr(self.oracle_engine, 'dispose'):
-                    # Handle SQLAlchemy engines if any
-                    self.oracle_engine.dispose()
-                    logger.debug("Oracle SQLAlchemy engine disposed")
-                else:
-                    logger.debug("Oracle engine - no dispose/close method available")
-                self.oracle_engine = None
+            if not self.comparison_results:
+                raise ValueError("No comparison results available")
                 
-            # Clean up any separate Oracle connection reference
-            if hasattr(self, 'oracle_connection') and self.oracle_connection:
-                try:
-                    self.oracle_connection.close()
-                    logger.debug("Oracle connection reference closed")
-                except:
-                    pass
-                self.oracle_connection = None
-                
-            # Clean up Oracle connection pool if exists
-            if hasattr(self, 'oracle_pool') and self.oracle_pool:
-                try:
-                    self.oracle_pool.close()
-                    logger.debug("Oracle connection pool closed")
-                except:
-                    pass
-                self.oracle_pool = None
-                
-            # Clean up PostgreSQL connections (SQLAlchemy)
-            if self.postgres_engine:
-                if hasattr(self.postgres_engine, 'dispose'):
-                    self.postgres_engine.dispose()
-                    logger.debug("PostgreSQL SQLAlchemy engine disposed")
-                else:
-                    logger.debug("PostgreSQL engine - no dispose method available")
-                self.postgres_engine = None
+            all_results = []
+            results = self.comparison_results
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Add missing records in target
+            for missing_id in results['missing_in_target']:
+                all_results.append({
+                    'Timestamp': timestamp,
+                    'Type': 'Missing in Target',
+                    'Primary_Key': str(missing_id),
+                    'Field': 'ALL',
+                    'Source_Value': 'EXISTS',
+                    'Target_Value': 'MISSING',
+                    'Description': f"Record with key '{missing_id}' exists in source but missing in target"
+                })
+            
+            # Add missing records in source
+            for missing_id in results['missing_in_source']:
+                all_results.append({
+                    'Timestamp': timestamp,
+                    'Type': 'Missing in Source',
+                    'Primary_Key': str(missing_id),
+                    'Field': 'ALL',
+                    'Source_Value': 'MISSING',
+                    'Target_Value': 'EXISTS',
+                    'Description': f"Record with key '{missing_id}' exists in target but missing in source"
+                })
+            
+            # Add field deltas
+            for delta in results.get('detailed_deltas', []):
+                all_results.append({
+                    'Timestamp': timestamp,
+                    'Type': 'Field Delta',
+                    'Primary_Key': str(delta['primary_key']),
+                    'Field': str(delta['field']),
+                    'Source_Value': str(delta['source_value'])[:1000],  # Limit length
+                    'Target_Value': str(delta['target_value'])[:1000],
+                    'Description': f"Field '{delta['field']}' differs between source and target"
+                })
+            
+            if all_results:
+                results_df = pd.DataFrame(all_results)
+                # Sort by Type and Primary_Key for better organization
+                results_df = results_df.sort_values(['Type', 'Primary_Key', 'Field'])
+                results_df.to_csv(output_path, index=False)
+                logger.info(f"Detailed results exported successfully to: {output_path} ({len(all_results)} records)")
+            else:
+                # Create empty file with headers
+                empty_df = pd.DataFrame(columns=[
+                    'Timestamp', 'Type', 'Primary_Key', 'Field', 
+                    'Source_Value', 'Target_Value', 'Description'
+                ])
+                empty_df.to_csv(output_path, index=False)
+                logger.info(f"No differences found. Empty detailed results file created: {output_path}")
                 
         except Exception as e:
-            logger.warning(f"Error during connection cleanup: {e}")
+            logger.error(f"Failed to export detailed results: {str(e)}")
+            raise
+
+    def export_missing_records_csv(self, output_path: str) -> None:
+        """Export only missing records to a separate CSV"""
+        try:
+            if not self.comparison_results:
+                raise ValueError("No comparison results available")
+                
+            results = self.comparison_results
+            missing_records = []
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Add missing records details
+            for record in results.get('missing_records_details', []):
+                missing_records.append({
+                    'Timestamp': timestamp,
+                    'Primary_Key': str(record['primary_key']),
+                    'Missing_In': record['missing_in'],
+                    'Table_Name': record['table_name'],
+                    'Status': 'Missing'
+                })
+            
+            if missing_records:
+                missing_df = pd.DataFrame(missing_records)
+                missing_df.to_csv(output_path, index=False)
+                logger.info(f"Missing records exported to: {output_path} ({len(missing_records)} records)")
+            else:
+                # Create empty file with headers
+                empty_df = pd.DataFrame(columns=[
+                    'Timestamp', 'Primary_Key', 'Missing_In', 'Table_Name', 'Status'
+                ])
+                empty_df.to_csv(output_path, index=False)
+                logger.info(f"No missing records found. Empty file created: {output_path}")
+                
+        except Exception as e:
+            logger.error(f"Failed to export missing records: {str(e)}")
+            raise
+        
+    def cleanup_connections(self) -> None:
+            """Clean up database connections"""
+            try:
+                # Clean up Oracle connections (cx_Oracle)
+                if self.oracle_engine:
+                    if isinstance(self.oracle_engine, cx_Oracle.Connection):
+                        self.oracle_engine.close()
+                        logger.debug("Oracle cx_Oracle connection closed")
+                    elif hasattr(self.oracle_engine, 'dispose'):
+                        # Handle SQLAlchemy engines if any
+                        self.oracle_engine.dispose()
+                        logger.debug("Oracle SQLAlchemy engine disposed")
+                    else:
+                        logger.debug("Oracle engine - no dispose/close method available")
+                    self.oracle_engine = None
+                    
+                # Clean up any separate Oracle connection reference
+                if hasattr(self, 'oracle_connection') and self.oracle_connection:
+                    try:
+                        self.oracle_connection.close()
+                        logger.debug("Oracle connection reference closed")
+                    except:
+                        pass
+                    self.oracle_connection = None
+                    
+                # Clean up Oracle connection pool if exists
+                if hasattr(self, 'oracle_pool') and self.oracle_pool:
+                    try:
+                        self.oracle_pool.close()
+                        logger.debug("Oracle connection pool closed")
+                    except:
+                        pass
+                    self.oracle_pool = None
+                    
+                # Clean up PostgreSQL connections (SQLAlchemy)
+                if self.postgres_engine:
+                    if hasattr(self.postgres_engine, 'dispose'):
+                        self.postgres_engine.dispose()
+                        logger.debug("PostgreSQL SQLAlchemy engine disposed")
+                    else:
+                        logger.debug("PostgreSQL engine - no dispose method available")
+                    self.postgres_engine = None
+                    
+            except Exception as e:
+                logger.warning(f"Error during connection cleanup: {e}")
 
 
 # Global instance
@@ -1079,17 +1351,82 @@ def compare_dataframes_with_config_primary_key(context, settings_section):
         logger.error(f"Failed to compare DataFrames: {str(e)}")
         raise
 
+# @when('I compare DataFrames using primary key "{primary_key}"')
+# def compare_dataframes_with_specified_primary_key(context, primary_key):
+#     """Compare DataFrames using specified primary key"""
+#     try:
+#         context.comparison_results = db_comparison_manager.compare_dataframes(primary_key)
+#         logger.info(f"Comparison completed using primary key: {primary_key}")
+        
+#     except Exception as e:
+#         logger.error(f"Failed to compare DataFrames: {str(e)}")
+#         raise
+
+# Updated step definitions to support omit_columns and omit_values
+
 @when('I compare DataFrames using primary key "{primary_key}"')
 def compare_dataframes_with_specified_primary_key(context, primary_key):
     """Compare DataFrames using specified primary key"""
     try:
-        context.comparison_results = db_comparison_manager.compare_dataframes(primary_key)
+        context.comparison_results = db_comparison_manager.compare_dataframes(
+            primary_key, omit_columns=None, omit_values=None
+        )
         logger.info(f"Comparison completed using primary key: {primary_key}")
         
     except Exception as e:
         logger.error(f"Failed to compare DataFrames: {str(e)}")
         raise
 
+@when('I compare DataFrames using primary key "{primary_key}" omitting columns "{omit_columns}"')
+def compare_dataframes_with_omit_columns(context, primary_key, omit_columns):
+    """Compare DataFrames using specified primary key and omitting specified columns"""
+    try:
+        # Parse comma-separated column names
+        omit_columns_list = [col.strip() for col in omit_columns.split(',') if col.strip()]
+        
+        context.comparison_results = db_comparison_manager.compare_dataframes(
+            primary_key, omit_columns=omit_columns_list, omit_values=None
+        )
+        logger.info(f"Comparison completed using primary key: {primary_key}, omitting columns: {omit_columns_list}")
+        
+    except Exception as e:
+        logger.error(f"Failed to compare DataFrames: {str(e)}")
+        raise
+
+@when('I compare DataFrames using primary key "{primary_key}" omitting values "{omit_values}"')
+def compare_dataframes_with_omit_values(context, primary_key, omit_values):
+    """Compare DataFrames using specified primary key and treating specified values as equal"""
+    try:
+        # Parse comma-separated values
+        omit_values_list = [val.strip() for val in omit_values.split(',') if val.strip()]
+        
+        context.comparison_results = db_comparison_manager.compare_dataframes(
+            primary_key, omit_columns=None, omit_values=omit_values_list
+        )
+        logger.info(f"Comparison completed using primary key: {primary_key}, treating as equal: {omit_values_list}")
+        
+    except Exception as e:
+        logger.error(f"Failed to compare DataFrames: {str(e)}")
+        raise
+
+@when('I compare DataFrames using primary key "{primary_key}" omitting columns "{omit_columns}" and values "{omit_values}"')
+def compare_dataframes_with_omit_columns_and_values(context, primary_key, omit_columns, omit_values):
+    """Compare DataFrames using specified primary key with both column and value omissions"""
+    try:
+        # Parse comma-separated column names and values
+        omit_columns_list = [col.strip() for col in omit_columns.split(',') if col.strip()]
+        omit_values_list = [val.strip() for val in omit_values.split(',') if val.strip()]
+        
+        context.comparison_results = db_comparison_manager.compare_dataframes(
+            primary_key, omit_columns=omit_columns_list, omit_values=omit_values_list
+        )
+        logger.info(f"Comparison completed using primary key: {primary_key}")
+        logger.info(f"Omitting columns: {omit_columns_list}")
+        logger.info(f"Treating as equal: {omit_values_list}")
+        
+    except Exception as e:
+        logger.error(f"Failed to compare DataFrames: {str(e)}")
+        raise
 # Verification Steps
 
 @then('the source DataFrame should have "{expected_count:d}" records')
@@ -1153,19 +1490,19 @@ def verify_all_fields_match(context):
 
 # Export Steps
 
-@then('I export comparison results to CSV file "{filename}"')
-def export_comparison_results_to_csv(context, filename):
-    """Export detailed comparison results to CSV file"""
-    try:
-        if not hasattr(context, 'comparison_results'):
-            raise ValueError("No comparison results available. Run comparison first.")
+# @then('I export comparison results to CSV file "{filename}"')
+# def export_comparison_results_to_csv(context, filename):
+#     """Export detailed comparison results to CSV file"""
+#     try:
+#         if not hasattr(context, 'comparison_results'):
+#             raise ValueError("No comparison results available. Run comparison first.")
         
-        db_comparison_manager.export_to_csv(filename, 'detailed')
-        logger.info(f"Comparison results exported to CSV: {filename}")
+#         db_comparison_manager.export_to_csv(filename, 'detailed')
+#         logger.info(f"Comparison results exported to CSV: {filename}")
         
-    except Exception as e:
-        logger.error(f"Failed to export comparison results to CSV: {str(e)}")
-        raise
+#     except Exception as e:
+#         logger.error(f"Failed to export comparison results to CSV: {str(e)}")
+#         raise
 
 @then('I export comparison summary to CSV file "{filename}"')
 def export_comparison_summary_to_csv(context, filename):
@@ -1508,3 +1845,70 @@ def save_comparison_results_as_json(context, filename):
     except Exception as e:
         logger.error(f"Failed to save comparison results as JSON: {str(e)}")
         raise
+
+    ##########################################################
+
+    # Step definition with updated functionality
+@then('I export comparison results to CSV file "{filename}"')
+def export_comparison_results_to_csv(context, filename):
+    """Export detailed comparison results to CSV file with timestamp"""
+    try:
+        if not hasattr(context, 'comparison_results'):
+            raise ValueError("No comparison results available. Run comparison first.")
+        
+        # Create timestamped filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base_name = filename.replace('.csv', '')
+        timestamped_filename = f"{base_name}_{timestamp}.csv"
+        
+        # Export all types of files
+        db_comparison_manager.export_to_csv(timestamped_filename, 'detailed')
+        db_comparison_manager.export_to_csv(f"summary_{timestamp}.csv", 'summary')
+        db_comparison_manager.export_to_csv(f"source_{timestamp}.csv", 'source')
+        db_comparison_manager.export_to_csv(f"target_{timestamp}.csv", 'target')
+        
+        logger.info(f"All comparison results exported with timestamp: {timestamp}")
+        
+    except Exception as e:
+        logger.error(f"Failed to export comparison results to CSV: {str(e)}")
+        raise
+
+
+
+
+# Enhanced step definition for comprehensive export
+@then('I export all comparison results with timestamp')
+def export_all_comparison_results(context):
+    """Export all types of comparison results with timestamp"""
+    try:
+        if not hasattr(context, 'comparison_results'):
+            raise ValueError("No comparison results available. Run comparison first.")
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Export all file types
+        exports = [
+            (f"detailed_comparison_{timestamp}.csv", 'detailed'),
+            (f"summary_comparison_{timestamp}.csv", 'summary'),
+            (f"source_data_{timestamp}.csv", 'source'),
+            (f"target_data_{timestamp}.csv", 'target')
+        ]
+        
+        for filename, export_type in exports:
+            try:
+                db_comparison_manager.export_to_csv(filename, export_type)
+                logger.info(f"Successfully exported {export_type}: {filename}")
+            except Exception as e:
+                logger.warning(f"Failed to export {export_type}: {str(e)}")
+        
+        # Export missing records separately
+        try:
+            missing_filename = f"missing_records_{timestamp}.csv"
+            db_comparison_manager.export_missing_records_csv(missing_filename)
+        except Exception as e:
+            logger.warning(f"Failed to export missing records: {str(e)}")
+            
+        logger.info(f"All comparison results exported with timestamp: {timestamp}")
+        
+    except Exception as e:
+        logger.error(f"Failed to export all comparison results: {str(e)}")
