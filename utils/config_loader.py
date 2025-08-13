@@ -1,23 +1,23 @@
-# ====================================
-# utils/config_loader.py
-# ====================================
-"""Enhanced configuration loader with validation and caching."""
+"""Simplified configuration loader without active environment dependency."""
 import os
 import configparser
-from typing import Dict, Any, Optional, Union, List
+from typing import Dict, Any, Optional, Union, List, Tuple
 from functools import lru_cache
 from pathlib import Path
 import json
 import yaml
-from dataclasses import dataclass
+import base64
+from dataclasses import dataclass, field
 import re
+from datetime import datetime, timedelta
+import threading
 
 from utils.custom_exceptions import ConfigurationError
 
 
 @dataclass
 class DatabaseConfig:
-    """Database configuration data class."""
+    """Enhanced database configuration data class."""
     host: str
     port: int
     database: str
@@ -26,150 +26,144 @@ class DatabaseConfig:
     ssl_enabled: bool = False
     pool_size: int = 5
     timeout: int = 30
+    max_overflow: int = 10
+    pool_pre_ping: bool = True
+    pool_recycle: int = 3600
+    connect_args: Dict[str, Any] = field(default_factory=dict)
     
-    def to_connection_string(self, db_type: str) -> str:
-        """Convert config to connection string."""
+    def __post_init__(self):
+        """Validate configuration after initialization."""
+        if not self.host:
+            raise ConfigurationError("Database host cannot be empty")
+        if not (1 <= self.port <= 65535):
+            raise ConfigurationError(f"Invalid port number: {self.port}")
+        if not self.username:
+            raise ConfigurationError("Database username cannot be empty")
+        if not self.password:
+            raise ConfigurationError("Database password cannot be empty")
+    
+    def to_connection_string(self, db_type: str, include_credentials: bool = True) -> str:
+        """Convert config to connection string with optional credential masking."""
+        if not include_credentials:
+            username = "***"
+            password = "***"
+        else:
+            username = self.username
+            password = self.password
+            
         if db_type.upper() == 'ORACLE':
-            return f"{self.username}/{self.password}@{self.host}:{self.port}/{self.database}"
+            return f"{username}/{password}@{self.host}:{self.port}/{self.database}"
         elif db_type.upper() == 'POSTGRES':
-            return f"postgresql://{self.username}:{self.password}@{self.host}:{self.port}/{self.database}"
+            return f"postgresql://{username}:{password}@{self.host}:{self.port}/{self.database}"
         elif db_type.upper() == 'MONGODB':
-            return f"mongodb://{self.username}:{self.password}@{self.host}:{self.port}/{self.database}"
+            return f"mongodb://{username}:{password}@{self.host}:{self.port}/{self.database}"
+        elif db_type.upper() == 'MYSQL':
+            return f"mysql://{username}:{password}@{self.host}:{self.port}/{self.database}"
         else:
             raise ConfigurationError(f"Unknown database type: {db_type}")
     
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary."""
+    def to_dict(self, include_credentials: bool = False) -> Dict[str, Any]:
+        """Convert to dictionary with optional credential masking."""
         return {
             'host': self.host,
             'port': self.port,
             'database': self.database,
-            'username': self.username,
-            'password': self.password,
+            'username': self.username if include_credentials else "***",
+            'password': self.password if include_credentials else "***",
             'ssl_enabled': self.ssl_enabled,
             'pool_size': self.pool_size,
-            'timeout': self.timeout
+            'timeout': self.timeout,
+            'max_overflow': self.max_overflow,
+            'pool_pre_ping': self.pool_pre_ping,
+            'pool_recycle': self.pool_recycle,
+            'connect_args': self.connect_args
         }
 
 
 @dataclass
-class APIConfig:
-    """API configuration data class."""
-    base_url: str
-    token: str
-    timeout: int = 30
-    retry_count: int = 3
-    verify_ssl: bool = True
+class ComparisonConfig:
+    """Configuration for database comparison settings."""
+    source_table: str
+    target_table: str
+    primary_key: str
+    omit_columns: List[str] = field(default_factory=list)
+    omit_values: List[str] = field(default_factory=list)
+    chunk_size: int = 50000
+    enable_performance_monitoring: bool = True
+    data_quality_threshold: float = 90.0
     
-    def get_headers(self) -> Dict[str, str]:
-        """Get API headers with authentication."""
-        return {
-            'Authorization': f'Bearer {self.token}',
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        }
+    def __post_init__(self):
+        """Validate configuration after initialization."""
+        if not self.primary_key:
+            raise ConfigurationError("Primary key cannot be empty")
+        if not (0.0 <= self.data_quality_threshold <= 100.0):
+            raise ConfigurationError("Data quality threshold must be between 0 and 100")
 
-
-@dataclass
-class MQConfig:
-    """Message Queue configuration data class."""
-    host: str
-    port: int
-    queue_manager: str
-    channel: str
-    queue: str
-    username: str
-    password: str
-    ssl_cipher: Optional[str] = None
-    timeout: int = 30
-
-
-@dataclass
-class AWSConfig:
-    """AWS configuration data class."""
-    access_key_id: str
-    secret_access_key: str
-    region: str = 'us-east-1'
-    s3_bucket: Optional[str] = None
-    
-    def to_boto_config(self) -> Dict[str, str]:
-        """Convert to boto3 configuration."""
-        return {
-            'aws_access_key_id': self.access_key_id,
-            'aws_secret_access_key': self.secret_access_key,
-            'region_name': self.region
-        }
-
-@dataclass
-class KafkaConfig:
-    """Kafka configuration data class."""
-    brokers: List[str]
-    topic: str
-    group_id: str
-    ssl_enabled: bool = False
-    timeout: int = 30
 
 class ConfigLoader:
-    """Configuration loader with support for multiple formats."""
+    """Simplified configuration loader without active environment dependency."""
     
     # Define which fields should be resolved from environment variables
     SENSITIVE_FIELDS = {
-        'username', 'password', 'pwd', 
-        'aws_access_key', 'aws_secret_key', 
-        'access_key_id', 'secret_access_key'
+        'username', 'password', 'pwd', 'token', 'key', 'secret',
+        'aws_access_key', 'aws_secret_key', 'access_key_id', 'secret_access_key'
     }
     
-    def __init__(self, config_dir: Optional[str] = None, active_env: Optional[str] = None):
+    # Configuration validation rules
+    VALIDATION_RULES = {
+        'port': lambda x: 1 <= int(x) <= 65535,
+        'timeout': lambda x: int(x) > 0,
+        'pool_size': lambda x: int(x) > 0,
+        'retry_count': lambda x: int(x) >= 0,
+    }
+    
+    def __init__(self, config_dir: Optional[str] = None, cache_timeout: int = 300):
         """
-        Initializes the ConfigLoader.
+        Initialize the ConfigLoader.
         
         Args:
-            config_dir: The directory where configuration files are located.
-            active_env: The active environment/tag (e.g., 'smoke', 'dev').
-                        This is used to load only the relevant config sections.
+            config_dir: The directory where configuration files are located
+            cache_timeout: Cache timeout in seconds
         """
         self.config_dir = Path(config_dir or "config")
-        self.active_env = active_env.upper() if active_env else None
-        self._config_cache: Dict[str, Any] = {}
+        self.cache_timeout = cache_timeout
         
+        # Thread-safe caching
+        self._config_cache: Dict[str, Tuple[Any, datetime]] = {}
+        self._cache_lock = threading.RLock()
+        
+        # Configuration file watchers
+        self._file_timestamps: Dict[str, float] = {}
+        
+        # Initialize logging
+        try:
+            from utils.logger import get_logger
+            self.logger = get_logger("config_loader")
+        except ImportError:
+            import logging
+            self.logger = logging.getLogger(__name__)
+    
+    def _is_cache_valid(self, cache_time: datetime) -> bool:
+        """Check if cache entry is still valid."""
+        return datetime.now() - cache_time < timedelta(seconds=self.cache_timeout)
+    
     def _should_resolve_from_env(self, key: str, value: str) -> bool:
-        """
-        Check if a configuration value should be resolved from environment variables.
-        
-        Args:
-            key: The configuration key
-            value: The configuration value
-            
-        Returns:
-            True if it should be resolved from environment
-        """
-        # Check if the key is a sensitive field
+        """Check if a configuration value should be resolved from environment variables."""
         key_lower = key.lower()
         if any(sensitive in key_lower for sensitive in self.SENSITIVE_FIELDS):
             # Check if the value looks like an environment variable reference
             if re.match(r'^[A-Z][A-Z0-9_]*$', value):
                 return True
         return False
-        
+    
     def _resolve_value(self, key: str, value: str, context: str = "") -> str:
-        """
-        Resolve a configuration value, checking environment variables for sensitive fields.
-        
-        Args:
-            key: The configuration key
-            value: The value from config file
-            context: Context for better error messages
-            
-        Returns:
-            Resolved value
-        """
+        """Resolve a configuration value from environment variables if needed."""
+        # Handle environment variable resolution
         if self._should_resolve_from_env(key, value):
-            # Try to get from system environment
             env_value = os.getenv(value)
             if env_value:
                 return env_value
             else:
-                # For sensitive fields, raise error if env var not found
                 raise ConfigurationError(
                     f"Environment variable '{value}' not found. "
                     f"Please set it as a system environment variable. "
@@ -177,74 +171,127 @@ class ConfigLoader:
                     config_key=value
                 )
         
-        # Return original value for non-sensitive fields
         return value
-                        
-    @lru_cache(maxsize=32)
-    def load_config_file(self, filename: str) -> Dict[str, Any]:
-        """Load configuration from file with caching."""
+    
+    def _validate_value(self, key: str, value: str, context: str = "") -> str:
+        """Validate configuration value according to rules."""
+        key_lower = key.lower()
+        for rule_key, rule_func in self.VALIDATION_RULES.items():
+            if rule_key in key_lower:
+                try:
+                    if not rule_func(value):
+                        raise ConfigurationError(f"Validation failed for {context}: {key}={value}")
+                except (ValueError, TypeError) as e:
+                    raise ConfigurationError(f"Invalid value for {context}: {key}={value} ({str(e)})")
+        return value
+    
+    def _is_file_modified(self, filename: str) -> bool:
+        """Check if file has been modified since last load."""
         file_path = self.config_dir / filename
-        
         if not file_path.exists():
-            raise ConfigurationError(f"Configuration file not found: {file_path}",
-                                   config_file=str(file_path))
-            
-        try:
-            if filename.endswith('.ini'):
-                return self._load_ini_config(file_path)
-            elif filename.endswith('.json'):
-                return self._load_json_config(file_path)
-            elif filename.endswith(('.yml', '.yaml')):
-                return self._load_yaml_config(file_path)
-            else:
-                raise ConfigurationError(f"Unsupported config format: {filename}",
-                                       config_file=filename)
-        except Exception as e:
-            if isinstance(e, ConfigurationError):
-                raise
-            raise ConfigurationError(f"Failed to load config file: {str(e)}",
-                                   config_file=str(file_path))
-            
-    def _load_ini_config(self, file_path: Path) -> Dict[str, Any]:
-        """Load INI configuration file."""
-        # Disable interpolation to handle '%' characters in values like datetime formats
-        config = configparser.ConfigParser(interpolation=None)
-        config.read(file_path)
+            return False
         
-        # Convert to dictionary and resolve sensitive values from environment
+        current_mtime = file_path.stat().st_mtime
+        cached_mtime = self._file_timestamps.get(filename, 0)
+        
+        if current_mtime > cached_mtime:
+            self._file_timestamps[filename] = current_mtime
+            return True
+        return False
+    
+    @lru_cache(maxsize=32)
+    def load_config_file(self, filename: str, force_reload: bool = False) -> Dict[str, Any]:
+        """
+        Load configuration from file with caching.
+        
+        NOTE: This loads the ENTIRE config file regardless of which sections exist.
+        All sections in the file become available for use.
+        """
+        cache_key = f"file_{filename}"
+        
+        with self._cache_lock:
+            # Check cache first
+            if not force_reload and cache_key in self._config_cache:
+                cached_data, cache_time = self._config_cache[cache_key]
+                if self._is_cache_valid(cache_time) and not self._is_file_modified(filename):
+                    self.logger.debug(f"Using cached config for {filename}")
+                    return cached_data
+            
+            # Load from file
+            file_path = self.config_dir / filename
+            
+            if not file_path.exists():
+                raise ConfigurationError(f"Configuration file not found: {file_path}",
+                                       config_file=str(file_path))
+            
+            try:
+                if filename.endswith('.ini'):
+                    data = self._load_ini_config(file_path)
+                elif filename.endswith('.json'):
+                    data = self._load_json_config(file_path)
+                elif filename.endswith(('.yml', '.yaml')):
+                    data = self._load_yaml_config(file_path)
+                else:
+                    raise ConfigurationError(f"Unsupported config format: {filename}",
+                                           config_file=filename)
+                
+                # Cache the result
+                self._config_cache[cache_key] = (data, datetime.now())
+                self.logger.debug(f"Loaded and cached config from {filename}")
+                return data
+                
+            except Exception as e:
+                if isinstance(e, ConfigurationError):
+                    raise
+                raise ConfigurationError(f"Failed to load config file: {str(e)}",
+                                       config_file=str(file_path))
+    
+    def _load_ini_config(self, file_path: Path) -> Dict[str, Any]:
+        """Load INI configuration file with enhanced processing."""
+        config = configparser.ConfigParser(interpolation=None)
+        config.read(file_path, encoding='utf-8')
+        
         result = {}
         for section in config.sections():
             result[section] = {}
             for key, value in config[section].items():
                 context = f"{section}.{key}"
-                result[section][key] = self._resolve_value(key, value, context)
+                try:
+                    # Resolve and validate value
+                    resolved_value = self._resolve_value(key, value, context)
+                    validated_value = self._validate_value(key, resolved_value, context)
+                    result[section][key] = validated_value
+                except Exception as e:
+                    self.logger.error(f"Error processing {context}: {str(e)}")
+                    raise
         
         return result
-        
+    
     def _load_json_config(self, file_path: Path) -> Dict[str, Any]:
         """Load JSON configuration file."""
-        with open(file_path) as f:
+        with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        
-        # Recursively resolve sensitive values in JSON
         return self._resolve_dict_values(data)
     
     def _load_yaml_config(self, file_path: Path) -> Dict[str, Any]:
         """Load YAML configuration file."""
-        with open(file_path) as f:
+        with open(file_path, 'r', encoding='utf-8') as f:
             data = yaml.safe_load(f)
-        
-        # Recursively resolve sensitive values in YAML
         return self._resolve_dict_values(data)
     
     def _resolve_dict_values(self, data: Any, context: str = "") -> Any:
-        """Recursively resolve sensitive values in dictionary."""
+        """Recursively resolve and validate values in dictionary."""
         if isinstance(data, dict):
             result = {}
             for k, v in data.items():
                 new_context = f"{context}.{k}" if context else k
                 if isinstance(v, str):
-                    result[k] = self._resolve_value(k, v, new_context)
+                    try:
+                        resolved_value = self._resolve_value(k, v, new_context)
+                        result[k] = self._validate_value(k, resolved_value, new_context)
+                    except Exception as e:
+                        self.logger.error(f"Error processing {new_context}: {str(e)}")
+                        raise
                 else:
                     result[k] = self._resolve_dict_values(v, new_context)
             return result
@@ -253,318 +300,296 @@ class ConfigLoader:
                     for i, item in enumerate(data)]
         else:
             return data
-            
-    def get_database_config(self, db_type: str) -> DatabaseConfig:
+    
+    def get_database_config(self, section_name: str) -> DatabaseConfig:
         """
-        Get database configuration for the active environment and type.
+        Get database configuration from ANY section name.
         
         Args:
-            db_type: Database type (ORACLE, POSTGRES, MONGODB)
-            
+            section_name: The exact section name in config.ini (e.g., "SAT_ORACLE", "SAT_POSTGRES")
+        
         Returns:
             DatabaseConfig object
         """
-        if not self.active_env:
-            raise ConfigurationError("An active environment must be set to load database config.")
-            
-        config_key = f"{self.active_env}_{db_type.upper()}"
-        
-        if config_key in self._config_cache:
-            return self._config_cache[config_key]
-            
         config = self.load_config_file("config.ini")
         
-        if config_key not in config:
-            raise ConfigurationError(f"Configuration not found for {config_key}",
-                                   config_key=config_key)
-            
-        db_config = config[config_key]
-        
-        username = db_config.get('username')
-        password = db_config.get('password')
-        
-        if not username:
+        if section_name not in config:
+            available_sections = list(config.keys())
             raise ConfigurationError(
-                f"Username not found for {config_key}.",
-                config_key=f"{config_key}.username"
+                f"Configuration section '{section_name}' not found. "
+                f"Available sections: {available_sections}",
+                config_key=section_name
             )
         
-        if not password:
-            raise ConfigurationError(
-                f"Password not found for {config_key}.",
-                config_key=f"{config_key}.password"
-            )
-        
-        database = db_config.get('database', db_config.get('service_name', ''))
+        db_config = config[section_name]
         
         try:
-            db_config_obj = DatabaseConfig(
+            return DatabaseConfig(
                 host=db_config['host'],
                 port=int(db_config['port']),
-                database=database,
-                username=username,
-                password=password,
+                database=db_config.get('database', db_config.get('service_name', '')),
+                username=db_config['username'],
+                password=db_config['password'],
                 ssl_enabled=db_config.get('ssl_enabled', 'false').lower() == 'true',
                 pool_size=int(db_config.get('pool_size', 5)),
-                timeout=int(db_config.get('timeout', 30))
+                timeout=int(db_config.get('timeout', 30)),
+                max_overflow=int(db_config.get('max_overflow', 10)),
+                pool_pre_ping=db_config.get('pool_pre_ping', 'true').lower() == 'true',
+                pool_recycle=int(db_config.get('pool_recycle', 3600)),
+                connect_args=json.loads(db_config.get('connect_args', '{}'))
             )
-        except (KeyError, ValueError) as e:
-            raise ConfigurationError(f"Invalid configuration for {config_key}: {str(e)}",
-                                   config_key=config_key)
-        
-        self._config_cache[config_key] = db_config_obj
-        return db_config_obj
+            
+        except (KeyError, ValueError, json.JSONDecodeError) as e:
+            raise ConfigurationError(f"Invalid configuration for {section_name}: {str(e)}",
+                                   config_key=section_name)
     
-    def get_aws_config(self) -> AWSConfig:
-        """Get AWS configuration."""
-        try:
-            config = self.load_config_file("config.ini")
-            aws_config = config.get('AWS', {})
-            
-            access_key = aws_config.get('access_key_id', '')
-            secret_key = aws_config.get('secret_access_key', '')
-            
-            if not access_key or not secret_key:
-                raise ConfigurationError(
-                    "AWS credentials not found in configuration.",
-                    config_key="AWS"
-                )
-            
-            return AWSConfig(
-                access_key_id=access_key,
-                secret_access_key=secret_key,
-                region=aws_config.get('region', 'us-east-1'),
-                s3_bucket=aws_config.get('s3_bucket')
-            )
-        except KeyError as e:
-            raise ConfigurationError(f"Invalid AWS configuration: {str(e)}",
-                                   config_key="AWS")
-        
-    def get_api_config(self, config_name: str) -> APIConfig:
+    def get_comparison_config(self, section_name: str = "comparison_settings") -> ComparisonConfig:
         """
-        Get API configuration for a specific name.
+        Get database comparison configuration from specified section.
         
         Args:
-            config_name: The name of the API configuration section in config.ini.
-            
-        Returns:
-            APIConfig object
+            section_name: Section name in config file (default: "comparison_settings")
         """
-        try:
-            section_name = config_name.upper()
-            
-            config = self.load_config_file("config.ini")
-            api_config = config.get(section_name, {})
-            
-            if not api_config:
-                raise ConfigurationError(
-                    f"API configuration section '{section_name}' not found.",
-                    config_key=section_name
-                )
-            
-            token = api_config.get('token', '')
-            
-            if not token:
-                raise ConfigurationError(
-                    f"API token not found in '{section_name}'.",
-                    config_key=f"{section_name}.token"
-                )
-                
-            return APIConfig(
-                base_url=api_config.get('base_url', 'http://localhost:8080'),
-                token=token,
-                timeout=int(api_config.get('timeout', '30')),
-                retry_count=int(api_config.get('retry_count', '3')),
-                verify_ssl=api_config.get('verify_ssl', 'true').lower() == 'true'
-            )
-        except (ValueError, KeyError) as e:
-            raise ConfigurationError(f"Invalid API configuration for '{config_name}': {str(e)}",
-                                   config_key=f"API_{config_name.upper()}")
-        
-    def get_mq_config(self) -> MQConfig:
-        """Get MQ configuration."""
-        try:
-            config = self.load_config_file("config.ini")
-            mq_config = config.get('MQ', {})
-            
-            return MQConfig(
-                host=mq_config.get('host', 'localhost'),
-                port=int(mq_config.get('port', '1414')),
-                queue_manager=mq_config.get('queue_manager', ''),
-                channel=mq_config.get('channel', ''),
-                queue=mq_config.get('queue', ''),
-                username=mq_config.get('username', ''),
-                password=mq_config.get('password', ''),
-                ssl_cipher=mq_config.get('ssl_cipher'),
-                timeout=int(mq_config.get('timeout', '30'))
-            )
-        except ValueError as e:
-            raise ConfigurationError(f"Invalid MQ configuration: {str(e)}",
-                                   config_key="MQ")
-    
-    def get_kafka_config(self) -> KafkaConfig:
-        """
-        Get Kafka configuration from the active environment.
-        
-        Returns:
-            KafkaConfig object
-        """
-        if not self.active_env:
-            raise ConfigurationError("An active environment must be set to load Kafka config.")
-            
-        config_key = f"KAFKA_{self.active_env}"
-        
-        if config_key in self._config_cache:
-            return self._config_cache[config_key]
-            
         config = self.load_config_file("config.ini")
-        kafka_config = config.get(config_key, {})
-
-        if not kafka_config:
+        
+        if section_name not in config:
+            available_sections = list(config.keys())
             raise ConfigurationError(
-                f"Kafka configuration section '{config_key}' not found.",
-                config_key=config_key
+                f"Comparison configuration section '{section_name}' not found. "
+                f"Available sections: {available_sections}",
+                config_key=section_name
             )
-
+        
+        comp_config = config[section_name]
+        
         try:
-            brokers_str = kafka_config.get('brokers', '')
-            if not brokers_str:
-                raise ConfigurationError(f"Kafka brokers not specified in '{config_key}'.")
-            brokers_list = [b.strip() for b in brokers_str.split(',')]
-            
-            return KafkaConfig(
-                brokers=brokers_list,
-                topic=kafka_config.get('topic', ''),
-                group_id=kafka_config.get('group_id', f'behave_tests_{self.active_env}_group'),
-                ssl_enabled=kafka_config.get('ssl_enabled', 'false').lower() == 'true',
-                timeout=int(kafka_config.get('timeout', 30))
+            return ComparisonConfig(
+                source_table=comp_config.get('SRCE_TABLE', comp_config.get('source_table', '')),
+                target_table=comp_config.get('TRGT_TABLE', comp_config.get('target_table', '')),
+                primary_key=comp_config['primary_key'],
+                omit_columns=[col.strip() for col in comp_config.get('omit_columns', '').split(',') if col.strip()],
+                omit_values=[val.strip() for val in comp_config.get('omit_values', '').split(',') if val.strip()],
+                chunk_size=int(comp_config.get('chunk_size', 50000)),
+                enable_performance_monitoring=comp_config.get('enable_performance_monitoring', 'true').lower() == 'true',
+                data_quality_threshold=float(comp_config.get('data_quality_threshold', 90.0))
             )
         except (KeyError, ValueError) as e:
-            raise ConfigurationError(f"Invalid Kafka configuration in '{config_key}': {str(e)}",
-                                   config_key=config_key)
+            raise ConfigurationError(f"Invalid comparison configuration in section '{section_name}': {str(e)}",
+                                   config_key=section_name)
     
-    def print_environment_status(self) -> None:
-        """Print status of required environment variables for debugging."""
-        print("\n=== Environment Variables Status ===")
-        
-        patterns = [
-            r'.*_ORACLE_USERNAME$',
-            r'.*_ORACLE_PASSWORD$',
-            r'.*_POSTGRES_USERNAME$',
-            r'.*_POSTGRES_PASSWORD$',
-            r'.*_MONGODB_USERNAME$',
-            r'.*_MONGODB_PASSWORD$',
-            r'AWS_ACCESS_KEY_ID$',
-            r'AWS_SECRET_ACCESS_KEY$'
-        ]
-        
-        print("Checking for credential environment variables:")
-        for pattern in patterns:
-            found = False
-            for var in os.environ.keys():
-                if re.match(pattern, var):
-                    print(f"  ✓ {var}: SET")
-                    found = True
-            if not found:
-                example = pattern.replace('.*', 'QA').replace('$', '')
-                print(f"  ✗ No variable matching pattern: {example}")
-        
-        print("===================================\n")
-    
-    def get_test_data(self, data_file: str, key: Optional[str] = None) -> Any:
+    def get_custom_config(self, section: str, key: Optional[str] = None, default: Any = None) -> Any:
         """
-        Load test data from file.
-        
-        Args:
-            data_file: Test data file name
-            key: Optional key to extract specific data
-            
-        Returns:
-            Test data
-        """
-        test_data_dir = self.config_dir.parent / "test_data"
-        file_path = test_data_dir / data_file
-        
-        if not file_path.exists():
-            raise ConfigurationError(f"Test data file not found: {file_path}",
-                                   config_file=str(file_path))
-        
-        if data_file.endswith('.json'):
-            with open(file_path) as f:
-                data = json.load(f)
-        elif data_file.endswith(('.yml', '.yaml')):
-            with open(file_path) as f:
-                data = yaml.safe_load(f)
-        else:
-            raise ConfigurationError(f"Unsupported test data format: {data_file}",
-                                   config_file=data_file)
-        
-        if key:
-            if key not in data:
-                raise ConfigurationError(f"Key '{key}' not found in test data",
-                                       config_key=key,
-                                       config_file=data_file)
-            return data[key]
-        
-        return data
-        
-    def validate_config(self) -> bool:
-        """
-        Validate configuration for the active environment.
-        
-        This method will only check the sections related to the active environment,
-        e.g., SMOKE_ORACLE, SMOKE_KAFKA, etc.
-        """
-        if not self.active_env:
-            print("No active environment set. Skipping configuration validation.")
-            return False
-            
-        print(f"Validating configuration for environment: {self.active_env}...")
-        
-        # Print environment status for debugging
-        self.print_environment_status()
-        
-        try:
-            # We don't need to load the full config to check sections.
-            # We can simply try to load the specific configs we need.
-            # This is a more targeted validation.
-            self.get_database_config('ORACLE')
-            self.get_kafka_config()
-            self.get_api_config('API')
-
-            print(f"Configuration for '{self.active_env}' is valid.")
-            return True
-            
-        except Exception as e:
-            print(f"Configuration validation failed for '{self.active_env}': {e}")
-            return False
-    
-    def get_custom_config(self, section: str, key: Optional[str] = None) -> Any:
-        """
-        Get custom configuration from config.ini.
+        Get custom configuration from any section in config.ini.
         
         Args:
             section: Section name in config file
             key: Optional specific key within section
-            
+            default: Default value if key/section not found
+        
         Returns:
-            Configuration value or section dict
+            Configuration value, section dict, or default
         """
-        config = self.load_config_file("config.ini")
+        try:
+            config = self.load_config_file("config.ini")
+            
+            if section not in config:
+                if default is not None:
+                    return default
+                available_sections = list(config.keys())
+                raise ConfigurationError(
+                    f"Section '{section}' not found in config. "
+                    f"Available sections: {available_sections}",
+                    config_key=section
+                )
+            
+            if key:
+                if key not in config[section]:
+                    if default is not None:
+                        return default
+                    available_keys = list(config[section].keys())
+                    raise ConfigurationError(
+                        f"Key '{key}' not found in section '{section}'. "
+                        f"Available keys: {available_keys}",
+                        config_key=f"{section}.{key}"
+                    )
+                return config[section][key]
+            
+            return config[section]
+            
+        except Exception as e:
+            if isinstance(e, ConfigurationError):
+                raise
+            raise ConfigurationError(f"Failed to get custom config: {str(e)}",
+                                   config_key=f"{section}.{key if key else ''}")
+    
+    def list_available_sections(self) -> List[str]:
+        """List all available configuration sections."""
+        try:
+            config = self.load_config_file("config.ini")
+            return list(config.keys())
+        except Exception as e:
+            self.logger.error(f"Failed to list sections: {str(e)}")
+            return []
+    
+    def section_exists(self, section_name: str) -> bool:
+        """Check if a configuration section exists."""
+        try:
+            config = self.load_config_file("config.ini")
+            return section_name in config
+        except Exception:
+            return False
+    
+    def validate_specific_sections(self, section_names: List[str]) -> Dict[str, bool]:
+        """
+        Validate specific configuration sections.
         
-        if section not in config:
-            raise ConfigurationError(f"Section '{section}' not found in config",
-                                   config_key=section)
+        Args:
+            section_names: List of section names to validate
         
-        if key:
-            if key not in config[section]:
-                raise ConfigurationError(f"Key '{key}' not found in section '{section}'",
-                                       config_key=f"{section}.{key}")
-            return config[section][key]
+        Returns:
+            Dictionary mapping section names to validation results
+        """
+        validation_results = {}
         
-        return config[section]
+        for section_name in section_names:
+            try:
+                # Just try to access the section
+                config = self.load_config_file("config.ini")
+                if section_name in config:
+                    # Check if it has minimum required fields
+                    section_data = config[section_name]
+                    if 'host' in section_data and 'port' in section_data:
+                        validation_results[section_name] = True
+                    else:
+                        self.logger.warning(f"Section '{section_name}' missing required fields")
+                        validation_results[section_name] = False
+                else:
+                    self.logger.error(f"Section '{section_name}' not found")
+                    validation_results[section_name] = False
+                    
+            except Exception as e:
+                self.logger.error(f"Validation failed for section '{section_name}': {str(e)}")
+                validation_results[section_name] = False
+        
+        # Summary
+        total_sections = len(validation_results)
+        passed_sections = sum(validation_results.values())
+        
+        if passed_sections == total_sections:
+            self.logger.info(f"✓ All {total_sections} specified sections validated successfully")
+        else:
+            self.logger.error(f"✗ {passed_sections}/{total_sections} sections passed validation")
+            for section, result in validation_results.items():
+                status = "✓" if result else "✗"
+                self.logger.info(f"  {status} {section}")
+        
+        return validation_results
+    
+    def print_environment_status(self) -> None:
+        """Print status of required environment variables for debugging."""
+        self.logger.info("=== Environment Variables Status ===")
+        
+        patterns = [
+            r'.*_ORACLE_USERNAME$',
+            r'.*_ORACLE_PASSWORD$', 
+            r'.*_POSTGRES_USERNAME$',
+            r'.*_POSTGRES_PASSWORD$',
+            r'.*_USERNAME$',
+            r'.*_PASSWORD$',
+            r'.*_TOKEN$'
+        ]
+        
+        found_vars = []
+        
+        for pattern in patterns:
+            for var in os.environ.keys():
+                if re.match(pattern, var):
+                    found_vars.append(var)
+        
+        if found_vars:
+            self.logger.info("Found environment variables:")
+            for var in sorted(set(found_vars)):
+                self.logger.info(f"  ✓ {var}: SET")
+        else:
+            self.logger.warning("No credential environment variables found")
+        
+        self.logger.info("=" * 40)
     
     def reload_config(self) -> None:
         """Clear cache and reload configuration."""
-        self._config_cache.clear()
+        with self._cache_lock:
+            self._config_cache.clear()
+            self._file_timestamps.clear()
+        
+        # Clear LRU cache  
         self.load_config_file.cache_clear()
+        self.logger.info("Configuration cache cleared and reloaded")
+    
+    def get_config_summary(self) -> Dict[str, Any]:
+        """Get a summary of current configuration."""
+        summary = {
+            'config_directory': str(self.config_dir),
+            'cache_entries': len(self._config_cache),
+            'cache_timeout': self.cache_timeout,
+            'available_sections': self.list_available_sections(),
+            'config_files': []
+        }
+        
+        # List available config files
+        for ext in ['*.ini', '*.json', '*.yml', '*.yaml']:
+            summary['config_files'].extend([
+                f.name for f in self.config_dir.glob(ext)
+            ])
+        
+        return summary
+
+
+# Example usage for your specific use case
+if __name__ == "__main__":
+    # Your usage pattern
+    loader = ConfigLoader(config_dir="config")
+    
+    # This is how you'll use it in your feature files
+    try:
+        # Load specific database configurations by section name
+        oracle_config = loader.get_database_config("SAT_ORACLE")
+        postgres_config = loader.get_database_config("SAT_POSTGRES")
+        
+        print(f"Oracle: {oracle_config.host}:{oracle_config.port}")
+        print(f"Postgres: {postgres_config.host}:{postgres_config.port}")
+        
+        # Load comparison settings
+        comparison_config = loader.get_comparison_config("comparison_settings")
+        print(f"Primary key: {comparison_config.primary_key}")
+        
+        # Load custom config sections
+        custom_section = loader.get_custom_config("custom_section")
+        specific_value = loader.get_custom_config("custom_section", "specific_key")
+        
+        # List what's available
+        print("Available sections:", loader.list_available_sections())
+        
+        # Validate specific sections you care about
+        validation_results = loader.validate_specific_sections([
+            "SAT_ORACLE", "SAT_POSTGRES", "comparison_settings"
+        ])
+        print("Validation results:", validation_results)
+        
+    except ConfigurationError as e:
+        print(f"Configuration error: {e}")
+
+
+#         @given('I connect to Oracle database using "{db_section}" configuration')
+# def connect_to_oracle(context, db_section):
+#     """Establish connection using ANY section name."""
+#     try:
+#         # Direct section access - no active environment needed
+#         db_config = context.config_loader.get_database_config(db_section)
+        
+#         # Rest of your connection logic unchanged
+#         oracle_engine = db_comparison_manager.get_oracle_connection(db_section)
+#         context.oracle_engine = oracle_engine
+        
+#     except Exception as e:
+#         logger.error(f"Oracle connection failed for section '{db_section}': {str(e)}")
+#         raise

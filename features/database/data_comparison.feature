@@ -1,335 +1,556 @@
-Feature: Database Comparison and Data Validation
+Feature: Enhanced Database Comparison and Data Validation
   As a data engineer
-  I want to compare data between different databases
-  So that I can validate data migration and synchronization
+  I want to compare data between different databases with advanced features
+  So that I can validate data migration and synchronization with comprehensive analysis
 
   Background:
     Given I load configuration from "config.ini"
 
-  @database @oracle @postgres
-  Scenario: Basic Oracle to PostgreSQL comparison using config tables
+  @database @oracle @postgres @enhanced
+  Scenario: Enhanced Oracle to PostgreSQL comparison with performance monitoring
     Given I connect to Oracle database using "SAT_ORACLE" configuration
     And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
-    When I load source data using table from config section "comparison_settings" key "SRCE_TABLE" on Oracle
+    When I enable progress monitoring
+    And I load source data using table from config section "comparison_settings" key "SRCE_TABLE" on Oracle
     And I load target data using table from config section "comparison_settings" key "TRGT_TABLE" on PostgreSQL
     And I validate data quality for source DataFrame
     And I validate data quality for target DataFrame
     And I compare DataFrames using primary key from config section "comparison_settings"
-    Then I print the comparison summary
-    And I export all results to Excel file "oracle_to_postgres_comparison.xlsx"
-    And I export comparison results to CSV file "detailed_comparison.csv"
-    And I save comparison results as JSON file "comparison_results.json"
+    Then I generate data quality report
+    And data quality score should be above "90.0"
+    And I print performance metrics
+    And I export all results to Excel file "enhanced_oracle_to_postgres_comparison.xlsx"
+    And I export all comparison results with timestamp
+    And I save comparison results as JSON file "enhanced_comparison_results.json"
 
-  @database @oracle @postgres @enhanced_comparison
-  Scenario: Enhanced comparison with omit columns and values
+  @database @oracle @postgres @enhanced_comparison @quality_reporting
+  Scenario: Enhanced comparison with omit columns, values, and quality reporting
     Given I connect to Oracle database using "SAT_ORACLE" configuration
     And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
-    When I execute direct query "SELECT emp_id, name, salary, last_updated, status FROM employees" on Oracle as source
-    And I execute direct query "SELECT emp_id, name, salary, last_updated, status FROM employees" on PostgreSQL as target
-    And I compare DataFrames using primary key "emp_id" omitting columns "last_updated" and values "N,None,NULL,---"
-    Then I print the comparison summary
-    And I export detailed CSV files with base name "enhanced_comparison"
+    When I enable progress monitoring
+    And I execute direct query "SELECT emp_id, name, salary, last_updated, status, created_date FROM employees" on Oracle as source
+    And I execute direct query "SELECT emp_id, name, salary, last_updated, status, created_date FROM employees" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    And I compare DataFrames using primary key "emp_id" omitting columns "last_updated,created_date" and values "N,None,NULL,---,INACTIVE,inactive"
+    Then I generate data quality report
+    And data quality score should be above "95.0"
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
 
-  @database @oracle @postgres @numeric_precision
-  Scenario: Compare with numeric precision handling
+  @database @oracle @postgres @numeric_precision @enhanced
+  Scenario: Enhanced numeric precision handling with performance tracking
     Given I connect to Oracle database using "SAT_ORACLE" configuration
     And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
-    When I execute direct query "SELECT id, amount, quantity FROM transactions" on Oracle as source
-    And I execute direct query "SELECT id, amount, quantity FROM transactions" on PostgreSQL as target
+    When I enable progress monitoring
+    And I execute direct query "SELECT id, amount, quantity, rate FROM transactions" on Oracle as source
+    And I execute direct query "SELECT id, amount, quantity, rate FROM transactions" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
     And I compare DataFrames using primary key "id"
-    Then I print the comparison summary
-    And I export detailed CSV files with base name "numeric_precision_test"
+    Then I generate data quality report
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
 
-  @database @oracle @postgres @omit_columns_only
-  Scenario: Compare omitting timestamp columns
+  @database @oracle @postgres @omit_columns_only @enhanced
+  Scenario: Enhanced comparison omitting timestamp columns with quality validation
     Given I connect to Oracle database using "SAT_ORACLE" configuration
     And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
-    When I execute direct query "SELECT customer_id, name, created_date, modified_date FROM customers" on Oracle as source
-    And I execute direct query "SELECT customer_id, name, created_date, modified_date FROM customers" on PostgreSQL as target
-    And I compare DataFrames using primary key "customer_id" omitting columns "created_date,modified_date"
-    Then I print the comparison summary
-    And I export detailed CSV files with base name "omit_timestamps"
+    When I enable progress monitoring
+    And I execute direct query "SELECT customer_id, name, email, status, created_date, modified_date FROM customers" on Oracle as source
+    And I execute direct query "SELECT customer_id, name, email, status, created_date, modified_date FROM customers" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    Then source DataFrame should have no duplicate records
+    And target DataFrame should have no duplicate records
+    When I compare DataFrames using primary key "customer_id" omitting columns "created_date,modified_date"
+    Then I generate data quality report
+    And data quality score should be above "85.0"
+    And I print the comparison summary
+    And I export all comparison results with timestamp
 
-  @database @oracle @postgres @omit_values_only
-  Scenario: Compare treating NULL variants as equal
+  @database @oracle @postgres @omit_values_only @enhanced
+  Scenario: Enhanced comparison treating NULL variants as equal with comprehensive reporting
     Given I connect to Oracle database using "SAT_ORACLE" configuration
     And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
-    When I execute direct query "SELECT product_id, description, category FROM products" on Oracle as source
-    And I execute direct query "SELECT product_id, description, category FROM products" on PostgreSQL as target
-    And I compare DataFrames using primary key "product_id" omitting values "NULL,None,N/A,---,N,NONE"
-    Then I print the comparison summary
-    And I export detailed CSV files with base name "null_variants"
+    When I enable progress monitoring
+    And I execute direct query "SELECT product_id, description, category, status FROM products" on Oracle as source
+    And I execute direct query "SELECT product_id, description, category, status FROM products" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    And I compare DataFrames using primary key "product_id" omitting values "NULL,None,N/A,---,N,NONE,null,NaN"
+    Then I generate data quality report
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
 
-  @database @oracle @postgres @full_audit_comparison
-  Scenario: Full audit comparison with all features
+  @database @oracle @postgres @full_audit_comparison @enhanced
+  Scenario: Enhanced full audit comparison with all advanced features
     Given I connect to Oracle database using "SAT_ORACLE" configuration
     And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
-    When I load source data using table from config section "comparison_settings" key "SRCE_TABLE" on Oracle
+    When I enable progress monitoring
+    And I load source data using table from config section "comparison_settings" key "SRCE_TABLE" on Oracle
     And I load target data using table from config section "comparison_settings" key "TRGT_TABLE" on PostgreSQL
-    And I compare DataFrames using primary key from config section "comparison_settings" omitting columns "last_updated_timestamp,created_date" and values "N,None,NULL,---,INACTIVE,inactive"
-    Then I print the comparison summary
-    And I export detailed CSV files with base name "full_audit"
-    And I export all results to Excel file "full_audit_complete.xlsx"
-    And I save comparison results as JSON file "full_audit_results.json"
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    Then source DataFrame should have no duplicate records
+    And target DataFrame should have no duplicate records
+    When I compare DataFrames using primary key from config section "comparison_settings" omitting columns "last_updated_timestamp,created_date,audit_user" and values "N,None,NULL,---,INACTIVE,inactive,SYSTEM"
+    Then I generate data quality report
+    And data quality score should be above "92.0"
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
+    And I save comparison results as JSON file "enhanced_full_audit_results.json"
 
-  @database @oracle @direct_query
-  Scenario: Oracle to Oracle comparison with direct queries
+  @database @oracle @direct_query @enhanced
+  Scenario: Enhanced Oracle to Oracle comparison with advanced validation
     Given I connect to Oracle database using "SAT_ORACLE" configuration
-    When I execute direct query "SELECT emp_id, first_name, last_name, salary FROM employees WHERE dept_id = 10" on Oracle as source
-    And I execute direct query "SELECT emp_id, first_name, last_name, salary FROM employees_backup WHERE dept_id = 10" on Oracle as target
+    When I enable progress monitoring
+    And I execute direct query "SELECT emp_id, first_name, last_name, salary, department FROM employees WHERE dept_id = 10" on Oracle as source
+    And I execute direct query "SELECT emp_id, first_name, last_name, salary, department FROM employees_backup WHERE dept_id = 10" on Oracle as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
     And I compare DataFrames using primary key "emp_id"
-    Then there should be no missing records in either DataFrame
+    Then I generate data quality report
+    And data quality score should be above "98.0"
+    And there should be no missing records in either DataFrame
     And all fields should match between source and target DataFrames
-    And I export all results to Excel file "oracle_oracle_comparison.xlsx"
+    And I print performance metrics
+    And I export all comparison results with timestamp
 
-  @database @postgres @postgres @validation
-  Scenario: PostgreSQL to PostgreSQL comparison with data validation
+  @database @postgres @postgres @validation @enhanced
+  Scenario: Enhanced PostgreSQL to PostgreSQL comparison with comprehensive data validation
     Given I connect to PostgreSQL database using "SAT_POSTGRES" configuration
-    When I execute direct query "SELECT customer_id, customer_name, email, registration_date FROM customers" on PostgreSQL as source
-    And I execute direct query "SELECT customer_id, customer_name, email, registration_date FROM customers_replica" on PostgreSQL as target
+    When I enable progress monitoring
+    And I execute direct query "SELECT customer_id, customer_name, email, registration_date, status FROM customers" on PostgreSQL as source
+    And I execute direct query "SELECT customer_id, customer_name, email, registration_date, status FROM customers_replica" on PostgreSQL as target
     And I validate data quality for source DataFrame
     And I validate data quality for target DataFrame
     Then source DataFrame should have no duplicate records
     And target DataFrame should have no duplicate records
     When I compare DataFrames using primary key "customer_id"
-    Then I print the comparison summary
+    Then I generate data quality report
+    And data quality score should be above "95.0"
+    And I print the comparison summary
     And I print DataFrame info for source
     And I print DataFrame info for target
+    And I print performance metrics
+    And I export all comparison results with timestamp
 
-  @database @oracle @postgres @expected_differences
-  Scenario: Compare with expected differences and verify counts
+  @database @oracle @postgres @expected_differences @enhanced
+  Scenario: Enhanced comparison with expected differences and comprehensive validation
     Given I connect to Oracle database using "SAT_ORACLE" configuration
     And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
-    When I execute direct query "SELECT product_id, product_name, price, category FROM products WHERE status = 'ACTIVE'" on Oracle as source
-    And I execute direct query "SELECT product_id, product_name, price, category FROM products WHERE status = 'ACTIVE'" on PostgreSQL as target
+    When I enable progress monitoring
+    And I execute direct query "SELECT product_id, product_name, price, category, status FROM products WHERE status = 'ACTIVE'" on Oracle as source
+    And I execute direct query "SELECT product_id, product_name, price, category, status FROM products WHERE status = 'ACTIVE'" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
     And I compare DataFrames using primary key "product_id"
     Then the source DataFrame should have "150" records
     And the target DataFrame should have "148" records
     And there should be "2" records missing in target
     And there should be "0" records missing in source
     And field "price" should have "5" delta records
-    And I export comparison results to CSV file "expected_differences.csv"
+    And I generate data quality report
+    And I print performance metrics
+    And I export all comparison results with timestamp
 
-  @database @oracle @data_export
-  Scenario: Data extraction and export from Oracle
+  @database @oracle @data_export @enhanced
+  Scenario: Enhanced data extraction and export from Oracle with quality validation
     Given I connect to Oracle database using "SAT_ORACLE" configuration
-    When I execute direct query "SELECT order_id, customer_id, order_date, total_amount FROM orders WHERE order_date >= SYSDATE - 30" on Oracle as source
-    And I validate data quality for source DataFrame
-    Then I print DataFrame info for source
-    And I export source DataFrame to CSV "oracle_orders_export.csv"
-
-  @database @postgres @data_export
-  Scenario: Data extraction and export from PostgreSQL
-    Given I connect to PostgreSQL database using "SAT_POSTGRES" configuration
-    When I execute direct query "SELECT user_id, username, email, created_at FROM users WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'" on PostgreSQL as source
+    When I enable progress monitoring
+    And I execute direct query "SELECT order_id, customer_id, order_date, total_amount, status FROM orders WHERE order_date >= SYSDATE - 30" on Oracle as source
     And I validate data quality for source DataFrame
     Then source DataFrame should have no duplicate records
     And I print DataFrame info for source
-    And I export source DataFrame to CSV "postgres_users_export.csv"
+    And I print performance metrics
+    And I export source DataFrame to CSV "enhanced_oracle_orders_export.csv"
 
-  @database @oracle @postgres @full_comparison
-  Scenario: Complete data migration validation with all export formats
+  @database @postgres @data_export @enhanced
+  Scenario: Enhanced data extraction and export from PostgreSQL with comprehensive validation
+    Given I connect to PostgreSQL database using "SAT_POSTGRES" configuration
+    When I enable progress monitoring
+    And I execute direct query "SELECT user_id, username, email, created_at, status FROM users WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'" on PostgreSQL as source
+    And I validate data quality for source DataFrame
+    Then source DataFrame should have no duplicate records
+    And I print DataFrame info for source
+    And I print performance metrics
+    And I export source DataFrame to CSV "enhanced_postgres_users_export.csv"
+
+  @database @oracle @postgres @full_comparison @enhanced
+  Scenario: Enhanced complete data migration validation with all export formats and quality reporting
     Given I connect to Oracle database using "SAT_ORACLE" configuration
     And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
-    When I read query from config section "queries" key "migration_source_query"
+    When I enable progress monitoring
+    And I read query from config section "queries" key "migration_source_query"
     And I execute query on Oracle and store as source DataFrame
     When I read query from config section "queries" key "migration_target_query"
     And I execute query on PostgreSQL and store as target DataFrame
     And I validate data quality for source DataFrame
     And I validate data quality for target DataFrame
-    And I compare DataFrames using primary key from config section "comparison_settings"
-    Then I print the comparison summary
+    Then source DataFrame should have no duplicate records
+    And target DataFrame should have no duplicate records
+    When I compare DataFrames using primary key from config section "comparison_settings"
+    Then I generate data quality report
+    And data quality score should be above "90.0"
+    And I print the comparison summary
     And I print DataFrame info for source
     And I print DataFrame info for target
-    And I export all results to Excel file "migration_validation_complete.xlsx"
-    And I export comparison results to CSV file "migration_detailed_results.csv"
-    And I export comparison summary to CSV file "migration_summary.csv"
-    And I save comparison results as JSON file "migration_results.json"
+    And I print performance metrics
+    And I export all comparison results with timestamp
+    And I save comparison results as JSON file "enhanced_migration_results.json"
 
-  @database @oracle @postgres @large_dataset
-  Scenario: Compare large datasets with memory optimization
+  @database @oracle @postgres @large_dataset @enhanced @performance
+  Scenario: Enhanced large dataset comparison with memory optimization and performance monitoring
     Given I connect to Oracle database using "SAT_ORACLE" configuration
     And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
-    When I execute direct query "SELECT transaction_id, account_id, transaction_type, amount, transaction_date FROM transactions WHERE transaction_date >= SYSDATE - 7" on Oracle as source
-    And I execute direct query "SELECT transaction_id, account_id, transaction_type, amount, transaction_date FROM transactions WHERE transaction_date >= CURRENT_DATE - INTERVAL '7 days'" on PostgreSQL as target
+    When I enable progress monitoring
+    And I execute direct query "SELECT transaction_id, account_id, transaction_type, amount, transaction_date, status FROM transactions WHERE transaction_date >= SYSDATE - 7" on Oracle as source
+    And I execute direct query "SELECT transaction_id, account_id, transaction_type, amount, transaction_date, status FROM transactions WHERE transaction_date >= CURRENT_DATE - INTERVAL '7 days'" on PostgreSQL as target
     And I validate data quality for source DataFrame
     And I validate data quality for target DataFrame
     Then source DataFrame should have no duplicate records
     And target DataFrame should have no duplicate records
-    When I compare DataFrames using primary key "transaction_id"
-    Then I print the comparison summary
-    And I export all results to Excel file "large_dataset_comparison.xlsx"
+    When I compare DataFrames using primary key "transaction_id" omitting columns "transaction_date" and values "NULL,None,---"
+    Then I generate data quality report
+    And data quality score should be above "88.0"
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
 
-  @database @oracle @oracle @same_db_comparison
-  Scenario: Compare tables within the same Oracle database
+  @database @oracle @oracle @same_db_comparison @enhanced
+  Scenario: Enhanced comparison of tables within the same Oracle database
     Given I connect to Oracle database using "SAT_ORACLE" configuration
-    When I execute direct query "SELECT emp_id, first_name, last_name, department, salary FROM employees" on Oracle as source
-    And I execute direct query "SELECT emp_id, first_name, last_name, department, salary FROM employees_archive" on Oracle as target
-    And I compare DataFrames using primary key "emp_id"
-    Then I print the comparison summary
-    And I export comparison results to CSV file "oracle_employee_comparison.csv"
+    When I enable progress monitoring
+    And I execute direct query "SELECT emp_id, first_name, last_name, department, salary, status FROM employees" on Oracle as source
+    And I execute direct query "SELECT emp_id, first_name, last_name, department, salary, status FROM employees_archive" on Oracle as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    And I compare DataFrames using primary key "emp_id" omitting values "INACTIVE,inactive,NULL,None"
+    Then I generate data quality report
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
 
-  @database @postgres @postgres @same_db_comparison
-  Scenario: Compare tables within the same PostgreSQL database
+  @database @postgres @postgres @same_db_comparison @enhanced
+  Scenario: Enhanced comparison of tables within the same PostgreSQL database
     Given I connect to PostgreSQL database using "SAT_POSTGRES" configuration
-    When I execute direct query "SELECT product_id, product_name, category, price, stock_quantity FROM products" on PostgreSQL as source
-    And I execute direct query "SELECT product_id, product_name, category, price, stock_quantity FROM products_staging" on PostgreSQL as target
+    When I enable progress monitoring
+    And I execute direct query "SELECT product_id, product_name, category, price, stock_quantity, status FROM products" on PostgreSQL as source
+    And I execute direct query "SELECT product_id, product_name, category, price, stock_quantity, status FROM products_staging" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
     And I compare DataFrames using primary key "product_id"
-    Then I print the comparison summary
-    And I export all results to Excel file "postgres_product_comparison.xlsx"
+    Then I generate data quality report
+    And data quality score should be above "93.0"
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
 
-  @database @oracle @postgres @config_driven
-  Scenario: Configuration-driven comparison test
+  @database @oracle @postgres @config_driven @enhanced
+  Scenario: Enhanced configuration-driven comparison test with quality validation
     Given I connect to Oracle database using "SAT_ORACLE" configuration
     And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
-    When I load source data using table from config section "comparison_settings" key "SRCE_TABLE" on Oracle
+    When I enable progress monitoring
+    And I load source data using table from config section "comparison_settings" key "SRCE_TABLE" on Oracle
     And I load target data using table from config section "comparison_settings" key "TRGT_TABLE" on PostgreSQL
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
     And I compare DataFrames using primary key from config section "comparison_settings"
-    Then there should be no missing records in either DataFrame
+    Then I generate data quality report
+    And data quality score should be above "95.0"
+    And there should be no missing records in either DataFrame
     And all fields should match between source and target DataFrames
-    And I export all results to Excel file "config_driven_comparison.xlsx"
+    And I print performance metrics
+    And I export all comparison results with timestamp
 
-  @database @oracle @postgres @data_quality
-  Scenario: Data quality validation and comparison
+  @database @oracle @postgres @data_quality @enhanced
+  Scenario: Enhanced data quality validation and comparison with comprehensive reporting
     Given I connect to Oracle database using "SAT_ORACLE" configuration
     And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
-    When I execute direct query "SELECT customer_id, customer_name, email, phone, address FROM customer_master" on Oracle as source
-    And I execute direct query "SELECT customer_id, customer_name, email, phone, address FROM customer_master" on PostgreSQL as target
+    When I enable progress monitoring
+    And I execute direct query "SELECT customer_id, customer_name, email, phone, address, status FROM customer_master" on Oracle as source
+    And I execute direct query "SELECT customer_id, customer_name, email, phone, address, status FROM customer_master" on PostgreSQL as target
     And I validate data quality for source DataFrame
     And I validate data quality for target DataFrame
     Then source DataFrame should have no duplicate records
     And target DataFrame should have no duplicate records
-    When I compare DataFrames using primary key "customer_id"
-    Then I print the comparison summary
-    And I export all results to Excel file "data_quality_comparison.xlsx"
-    And I save comparison results as JSON file "data_quality_results.json"
+    When I compare DataFrames using primary key "customer_id" omitting values "NULL,None,N/A,---"
+    Then I generate data quality report
+    And data quality score should be above "97.0"
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
+    And I save comparison results as JSON file "enhanced_data_quality_results.json"
 
-  @database @oracle @postgres @specific_validation
-  Scenario: Validate specific field differences and counts
+  @database @oracle @postgres @specific_validation @enhanced
+  Scenario: Enhanced validation of specific field differences and counts with quality metrics
     Given I connect to Oracle database using "SAT_ORACLE" configuration
     And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
-    When I execute direct query "SELECT account_id, account_type, balance, status, last_updated FROM accounts" on Oracle as source
+    When I enable progress monitoring
+    And I execute direct query "SELECT account_id, account_type, balance, status, last_updated FROM accounts" on Oracle as source
     And I execute direct query "SELECT account_id, account_type, balance, status, last_updated FROM accounts" on PostgreSQL as target
-    And I compare DataFrames using primary key "account_id"
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    And I compare DataFrames using primary key "account_id" omitting columns "last_updated"
     Then the source DataFrame should have "1000" records
     And the target DataFrame should have "995" records
     And there should be "5" records missing in target
     And there should be "0" records missing in source
     And field "balance" should have "0" delta records
     And field "status" should have "2" delta records
-    And I export comparison results to CSV file "specific_validation_results.csv"
+    And I generate data quality report
+    And I print performance metrics
+    And I export all comparison results with timestamp
 
-  @database @oracle @postgres @error_handling
-  Scenario: Test error handling and edge cases
+  @database @oracle @postgres @error_handling @enhanced
+  Scenario: Enhanced error handling and edge cases with comprehensive validation
     Given I connect to Oracle database using "SAT_ORACLE" configuration
     And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
-    When I execute direct query "SELECT id, name, description FROM test_table WHERE id BETWEEN 1 AND 100" on Oracle as source
-    And I execute direct query "SELECT id, name, description FROM test_table WHERE id BETWEEN 1 AND 100" on PostgreSQL as target
-    And I compare DataFrames using primary key "id"
-    Then I print the comparison summary
-    And I print DataFrame info for source
-    And I print DataFrame info for target
-    And I export all results to Excel file "error_handling_test.xlsx"
-
-  @database @oracle @postgres @mixed_queries
-  Scenario: Mix of config queries and direct queries
-    Given I connect to Oracle database using "SAT_ORACLE" configuration
-    And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
-    When I read query from config section "queries" key "complex_source_query"
-    And I execute query on Oracle and store as source DataFrame
-    And I execute direct query "SELECT report_id, report_name, created_by, created_date FROM reports" on PostgreSQL as target
-    And I compare DataFrames using primary key "report_id"
-    Then I print the comparison summary
-    And I export comparison summary to CSV file "mixed_queries_summary.csv"
-
-  @database @oracle @postgres @clob_xml_handling
-  Scenario: Test CLOB and XML data handling
-    Given I connect to Oracle database using "SAT_ORACLE" configuration
-    And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
-    When I execute direct query "SELECT doc_id, title, xml_content, clob_data FROM documents WHERE doc_type = 'XML'" on Oracle as source
-    And I execute direct query "SELECT doc_id, title, xml_content, clob_data FROM documents WHERE doc_type = 'XML'" on PostgreSQL as target
+    When I enable progress monitoring
+    And I execute direct query "SELECT id, name, description, status FROM test_table WHERE id BETWEEN 1 AND 100" on Oracle as source
+    And I execute direct query "SELECT id, name, description, status FROM test_table WHERE id BETWEEN 1 AND 100" on PostgreSQL as target
     And I validate data quality for source DataFrame
     And I validate data quality for target DataFrame
-    And I compare DataFrames using primary key "doc_id"
-    Then I print the comparison summary
-    And I export all results to Excel file "clob_xml_comparison.xlsx"
+    And I compare DataFrames using primary key "id"
+    Then I generate data quality report
+    And I print the comparison summary
+    And I print DataFrame info for source
+    And I print DataFrame info for target
+    And I print performance metrics
+    And I export all comparison results with timestamp
 
-  # Scenarios for different environments
-  @database @oracle @dev_environment
-  Scenario: Development environment comparison
+  @database @oracle @postgres @mixed_queries @enhanced
+  Scenario: Enhanced mix of config queries and direct queries with performance tracking
+    Given I connect to Oracle database using "SAT_ORACLE" configuration
+    And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
+    When I enable progress monitoring
+    And I read query from config section "queries" key "complex_source_query"
+    And I execute query on Oracle and store as source DataFrame
+    And I execute direct query "SELECT report_id, report_name, created_by, created_date, status FROM reports" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    And I compare DataFrames using primary key "report_id" omitting columns "created_date"
+    Then I generate data quality report
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
+
+  @database @oracle @postgres @clob_xml_handling @enhanced
+  Scenario: Enhanced CLOB and XML data handling with quality validation
+    Given I connect to Oracle database using "SAT_ORACLE" configuration
+    And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
+    When I enable progress monitoring
+    And I execute direct query "SELECT doc_id, title, xml_content, clob_data, status FROM documents WHERE doc_type = 'XML'" on Oracle as source
+    And I execute direct query "SELECT doc_id, title, xml_content, clob_data, status FROM documents WHERE doc_type = 'XML'" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    And I compare DataFrames using primary key "doc_id" omitting values "NULL,None,---"
+    Then I generate data quality report
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
+
+  # Enhanced scenarios for different environments
+  @database @oracle @dev_environment @enhanced
+  Scenario: Enhanced development environment comparison with quality metrics
     Given I load configuration from "config.ini"
     And I connect to Oracle database using "DEV_ORACLE" configuration
-    When I execute direct query "SELECT test_id, test_name, test_result FROM dev_tests" on Oracle as source
+    When I enable progress monitoring
+    And I execute direct query "SELECT test_id, test_name, test_result, execution_date FROM dev_tests" on Oracle as source
     And I validate data quality for source DataFrame
-    Then I print DataFrame info for source
-    And I export source DataFrame to CSV "dev_test_data.csv"
+    Then source DataFrame should have no duplicate records
+    And I print DataFrame info for source
+    And I print performance metrics
+    And I export source DataFrame to CSV "enhanced_dev_test_data.csv"
 
-  @database @postgres @qa_environment  
-  Scenario: QA environment comparison
+  @database @postgres @qa_environment @enhanced
+  Scenario: Enhanced QA environment comparison with comprehensive validation
     Given I load configuration from "config.ini"
     And I connect to PostgreSQL database using "QA_POSTGRES" configuration
-    When I execute direct query "SELECT qa_id, test_case, result, executed_by FROM qa_results" on PostgreSQL as source
+    When I enable progress monitoring
+    And I execute direct query "SELECT qa_id, test_case, result, executed_by, execution_date FROM qa_results" on PostgreSQL as source
     And I validate data quality for source DataFrame
-    Then I print DataFrame info for source
-    And I export source DataFrame to CSV "qa_test_results.csv"
+    Then source DataFrame should have no duplicate records
+    And I print DataFrame info for source
+    And I print performance metrics
+    And I export source DataFrame to CSV "enhanced_qa_test_results.csv"
 
-    # Feature file examples using the enhanced comparison steps
+  # New advanced scenarios leveraging enhanced features
+  @database @oracle @postgres @advanced_quality @performance
+  Scenario: Advanced data quality analysis with performance benchmarking
+    Given I connect to Oracle database using "SAT_ORACLE" configuration
+    And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
+    When I enable progress monitoring
+    And I execute direct query "SELECT transaction_id, customer_id, amount, currency, transaction_date, status, created_by FROM financial_transactions" on Oracle as source
+    And I execute direct query "SELECT transaction_id, customer_id, amount, currency, transaction_date, status, created_by FROM financial_transactions" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    Then source DataFrame should have no duplicate records
+    And target DataFrame should have no duplicate records
+    When I compare DataFrames using primary key "transaction_id" omitting columns "created_by,transaction_date" and values "NULL,None,---,PENDING,pending"
+    Then I generate data quality report
+    And data quality score should be above "96.0"
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
+    And I save comparison results as JSON file "advanced_quality_analysis.json"
 
-Feature: Enhanced Database Comparison with Omit Options
-  As a data engineer
-  I want to compare data while omitting specific columns and values
-  So that I can focus on meaningful differences
+  @database @oracle @postgres @memory_optimization @large_scale
+  Scenario: Large-scale comparison with memory optimization and chunked processing
+    Given I connect to Oracle database using "SAT_ORACLE" configuration
+    And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
+    When I enable progress monitoring
+    And I execute direct query "SELECT * FROM (SELECT order_id, customer_id, product_id, quantity, price, order_date FROM order_details WHERE order_date >= SYSDATE - 90) WHERE ROWNUM <= 100000" on Oracle as source
+    And I execute direct query "SELECT order_id, customer_id, product_id, quantity, price, order_date FROM order_details WHERE order_date >= CURRENT_DATE - INTERVAL '90 days' LIMIT 100000" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    And I compare DataFrames using primary key "order_id" omitting columns "order_date"
+    Then I generate data quality report
+    And data quality score should be above "85.0"
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
+
+  @database @oracle @postgres @comprehensive_audit @compliance
+  Scenario: Comprehensive audit trail comparison for compliance reporting
+    Given I connect to Oracle database using "SAT_ORACLE" configuration
+    And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
+    When I enable progress monitoring
+    And I load source data using table from config section "audit_settings" key "AUDIT_SOURCE_TABLE" on Oracle
+    And I load target data using table from config section "audit_settings" key "AUDIT_TARGET_TABLE" on PostgreSQL
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    And I compare DataFrames using primary key from config section "audit_settings" omitting columns "audit_timestamp,audit_user,last_modified" and values "SYSTEM,AUTO,NULL,None,---"
+    Then I generate data quality report
+    And data quality score should be above "99.0"
+    And there should be no missing records in either DataFrame
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
+    And I save comparison results as JSON file "compliance_audit_report.json"
+
+  @database @oracle @postgres @real_time_validation @monitoring
+  Scenario: Real-time data validation with continuous monitoring capabilities
+    Given I connect to Oracle database using "SAT_ORACLE" configuration
+    And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
+    When I enable progress monitoring
+    And I execute direct query "SELECT sync_id, table_name, record_count, checksum, sync_timestamp FROM sync_status WHERE sync_timestamp >= SYSDATE - 1/24" on Oracle as source
+    And I execute direct query "SELECT sync_id, table_name, record_count, checksum, sync_timestamp FROM sync_status WHERE sync_timestamp >= CURRENT_TIMESTAMP - INTERVAL '1 hour'" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    And I compare DataFrames using primary key "sync_id" omitting columns "sync_timestamp"
+    Then I generate data quality report
+    And data quality score should be above "98.0"
+    And there should be no missing records in either DataFrame
+    And all fields should match between source and target DataFrames
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
+
+Feature: Enhanced Database Comparison with Advanced Omit Options
+  As a senior data engineer
+  I want to perform sophisticated data comparisons with flexible omit capabilities
+  So that I can conduct precise data validation while ignoring irrelevant differences
 
   Background:
     Given I load configuration from "config.ini"
     And I connect to Oracle database using "SAT_ORACLE" configuration
     And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
 
-  @database @basic_comparison
-  Scenario: Basic comparison without omissions
-    When I execute direct query "SELECT emp_id, name, salary, created_date FROM employees" on Oracle as source
-    And I execute direct query "SELECT emp_id, name, salary, created_date FROM employees" on PostgreSQL as target
+  @database @enhanced_basic_comparison @performance
+  Scenario: Enhanced basic comparison with performance monitoring
+    When I enable progress monitoring
+    And I execute direct query "SELECT emp_id, name, salary, department, created_date FROM employees" on Oracle as source
+    And I execute direct query "SELECT emp_id, name, salary, department, created_date FROM employees" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
     And I compare DataFrames using primary key "emp_id"
-    Then I print the comparison summary
+    Then I generate data quality report
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
 
-  @database @omit_columns
-  Scenario: Compare while omitting timestamp columns
-    When I execute direct query "SELECT emp_id, name, salary, created_date, modified_date FROM employees" on Oracle as source
-    And I execute direct query "SELECT emp_id, name, salary, created_date, modified_date FROM employees" on PostgreSQL as target
-    And I compare DataFrames using primary key "emp_id" omitting columns "created_date,modified_date"
-    Then I print the comparison summary
-    And I export all results to Excel file "omit_columns_comparison.xlsx"
+  @database @enhanced_omit_columns @quality_focus
+  Scenario: Enhanced comparison omitting audit and timestamp columns with quality focus
+    When I enable progress monitoring
+    And I execute direct query "SELECT emp_id, name, salary, department, created_date, modified_date, created_by, modified_by FROM employees" on Oracle as source
+    And I execute direct query "SELECT emp_id, name, salary, department, created_date, modified_date, created_by, modified_by FROM employees" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    Then source DataFrame should have no duplicate records
+    And target DataFrame should have no duplicate records
+    When I compare DataFrames using primary key "emp_id" omitting columns "created_date,modified_date,created_by,modified_by"
+    Then I generate data quality report
+    And data quality score should be above "95.0"
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
 
-  @database @omit_values
-  Scenario: Compare treating NULL variants as equal
-    When I execute direct query "SELECT product_id, name, description, status FROM products" on Oracle as source
-    And I execute direct query "SELECT product_id, name, description, status FROM products" on PostgreSQL as target
-    And I compare DataFrames using primary key "product_id" omitting values "NaN,---,None,NULL,null"
-    Then I print the comparison summary
-    And I export detailed CSV files with base name "omit_values_comparison"
+  @database @enhanced_omit_values @null_handling
+  Scenario: Enhanced NULL and empty value handling with comprehensive validation
+    When I enable progress monitoring
+    And I execute direct query "SELECT product_id, name, description, status, category FROM products" on Oracle as source
+    And I execute direct query "SELECT product_id, name, description, status, category FROM products" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    And I compare DataFrames using primary key "product_id" omitting values "NaN,---,None,NULL,null,N/A,na,NA,empty,EMPTY"
+    Then I generate data quality report
+    And data quality score should be above "90.0"
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
 
-  @database @omit_both
-  Scenario: Compare omitting both columns and values
-    When I execute direct query "SELECT customer_id, name, email, status, created_date, notes FROM customers" on Oracle as source
-    And I execute direct query "SELECT customer_id, name, email, status, created_date, notes FROM customers" on PostgreSQL as target
-    And I compare DataFrames using primary key "customer_id" omitting columns "created_date,notes" and values "NaN,---,None,NULL,N/A"
-    Then I print the comparison summary
+  @database @enhanced_comprehensive_omit @production_ready
+  Scenario: Production-ready comprehensive comparison with multiple omit strategies
+    When I enable progress monitoring
+    And I execute direct query "SELECT customer_id, name, email, phone, status, created_date, last_login, notes, internal_notes FROM customers" on Oracle as source
+    And I execute direct query "SELECT customer_id, name, email, phone, status, created_date, last_login, notes, internal_notes FROM customers" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    Then source DataFrame should have no duplicate records
+    And target DataFrame should have no duplicate records
+    When I compare DataFrames using primary key "customer_id" omitting columns "created_date,last_login,internal_notes" and values "NaN,---,None,NULL,N/A,INACTIVE,inactive,PENDING,pending"
+    Then I generate data quality report
+    And data quality score should be above "93.0"
     And there should be no missing records in either DataFrame
-    And I export all results to Excel file "comprehensive_comparison.xlsx"
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
+    And I save comparison results as JSON file "production_comprehensive_results.json"
 
-  @database @audit_fields_omit
-  Scenario: Production data validation omitting audit fields
-    When I execute direct query "SELECT order_id, customer_id, amount, status, created_by, created_date, modified_by, modified_date FROM orders" on Oracle as source
-    And I execute direct query "SELECT order_id, customer_id, amount, status, created_by, created_date, modified_by, modified_date FROM orders" on PostgreSQL as target
-    And I compare DataFrames using primary key "order_id" omitting columns "created_by,created_date,modified_by,modified_date" and values "SYSTEM,---,NULL,None"
-    Then I print the comparison summary
-    And I save comparison results as JSON file "production_audit_results.json"
+  @database @enhanced_audit_comparison @compliance
+  Scenario: Enterprise audit comparison with compliance-focused omissions
+    When I enable progress monitoring
+    And I execute direct query "SELECT order_id, customer_id, amount, status, created_by, created_date, modified_by, modified_date, audit_trail FROM orders" on Oracle as source
+    And I execute direct query "SELECT order_id, customer_id, amount, status, created_by, created_date, modified_by, modified_date, audit_trail FROM orders" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    And I compare DataFrames using primary key "order_id" omitting columns "created_by,created_date,modified_by,modified_date,audit_trail" and values "SYSTEM,AUTO,BATCH,---,NULL,None"
+    Then I generate data quality report
+    And data quality score should be above "97.0"
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
+    And I save comparison results as JSON file "enterprise_audit_compliance.json"
 
-  @database @numeric_precision_test
-  Scenario: Test numeric precision handling with omit values
-    When I execute direct query "SELECT account_id, balance, interest_rate, status FROM accounts" on Oracle as source
-    And I execute direct query "SELECT account_id, balance, interest_rate, status FROM accounts" on PostgreSQL as target
-    And I compare DataFrames using primary key "account_id" omitting values "0.0,0,---,inactive,INACTIVE"
-    Then I print the comparison summary
+  @database @enhanced_financial_precision @accuracy_critical
+  Scenario: Financial data comparison with precision handling and accuracy validation
+    When I enable progress monitoring
+    And I execute direct query "SELECT account_id, balance, interest_rate, status, currency, last_calculated FROM accounts" on Oracle as source
+    And I execute direct query "SELECT account_id, balance, interest_rate, status, currency, last_calculated FROM accounts" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    And I compare DataFrames using primary key "account_id" omitting columns "last_calculated" and values "0.0,0,---,inactive,INACTIVE,CLOSED,closed"
+    Then I generate data quality report
+    And data quality score should be above "99.0"
     And field "balance" should have "0" delta records
-    And I export comparison results to CSV file "numeric_precision_test.csv"
+    And field "interest_rate" should have "0" delta records
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
+    And I save comparison results as JSON file "financial_precision_validation.json"
