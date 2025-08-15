@@ -81,17 +81,53 @@ class EnhancedLogger:
         self._config = self._load_default_config()
     
     def _load_default_config(self) -> Dict[str, Any]:
-        """Load default logging configuration."""
-        return {
-            'log_level': os.getenv('LOG_LEVEL', 'INFO'),
+        """Load default logging configuration from config.ini or environment variables."""
+        # Try to load from config.ini first, fall back to environment variables
+        config = {}
+        
+        try:
+            # Try direct INI parsing to avoid ConfigLoader validation issues
+            import configparser
+            config_path = Path('config/config.ini')
+            if config_path.exists():
+                parser = configparser.ConfigParser()
+                parser.read(config_path)
+                
+                # Get log_level from DEFAULT section first
+                if 'DEFAULT' in parser and 'log_level' in parser['DEFAULT']:
+                    config['log_level'] = parser['DEFAULT']['log_level']
+                else:
+                    # Look for log_level in any section
+                    for section_name in parser.sections():
+                        if 'log_level' in parser[section_name]:
+                            config['log_level'] = parser[section_name]['log_level']
+                            break
+                    else:
+                        config['log_level'] = 'INFO'  # Default fallback
+            else:
+                config['log_level'] = 'INFO'  # Default if no config file
+                    
+        except Exception as e:
+            # Fallback to default if config.ini loading fails
+            print(f"Warning: Could not load log_level from config.ini: {e}")
+            config['log_level'] = 'INFO'
+        
+        # Override with environment variable if set
+        config['log_level'] = os.getenv('LOG_LEVEL', config.get('log_level', 'INFO'))
+        
+        # Set other configuration from environment variables with defaults
+        config.update({
             'log_format': os.getenv('LOG_FORMAT', 'standard'),  # standard, json, colored
             'max_file_size': int(os.getenv('LOG_MAX_FILE_SIZE', '10485760')),  # 10MB
             'backup_count': int(os.getenv('LOG_BACKUP_COUNT', '5')),
             'log_to_console': os.getenv('LOG_TO_CONSOLE', 'true').lower() == 'true',
             'log_to_file': os.getenv('LOG_TO_FILE', 'true').lower() == 'true',
             'logs_base_dir': os.getenv('LOGS_BASE_DIR', 'logs'),
-            'separate_error_log': os.getenv('SEPARATE_ERROR_LOG', 'true').lower() == 'true'
-        }
+            'separate_error_log': os.getenv('SEPARATE_ERROR_LOG', 'false').lower() == 'true',  # Changed to false by default
+            'single_log_file': os.getenv('SINGLE_LOG_FILE', 'true').lower() == 'true'  # Use single log file
+        })
+        
+        return config
     
     def setup_logger(
         self, 
@@ -172,34 +208,49 @@ class EnhancedLogger:
     
     def _add_file_handlers(self, logger: logging.Logger, name: str, formatter: logging.Formatter):
         """Add file handlers to logger."""
-        # Create logs directory structure
+        # Create simple logs directory
         logs_dir = Path(self._config['logs_base_dir'])
-        app_logs_dir = logs_dir / "application"
-        app_logs_dir.mkdir(parents=True, exist_ok=True)
+        logs_dir.mkdir(parents=True, exist_ok=True)
         
-        # Main log file with rotation
-        log_file = app_logs_dir / f"{name}.log"
-        file_handler = logging.handlers.RotatingFileHandler(
-            log_file,
-            maxBytes=self._config['max_file_size'],
-            backupCount=self._config['backup_count'],
-            encoding='utf-8'
-        )
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
-        
-        # Separate error log file if configured
-        if self._config['separate_error_log']:
-            error_log_file = app_logs_dir / f"{name}_errors.log"
-            error_handler = logging.handlers.RotatingFileHandler(
-                error_log_file,
+        if self._config.get('single_log_file', True):
+            # Single log file for all loggers - much simpler approach
+            log_file = logs_dir / "test_automation.log"
+            file_handler = logging.handlers.RotatingFileHandler(
+                log_file,
                 maxBytes=self._config['max_file_size'],
                 backupCount=self._config['backup_count'],
                 encoding='utf-8'
             )
-            error_handler.setLevel(logging.ERROR)
-            error_handler.setFormatter(formatter)
-            logger.addHandler(error_handler)
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
+        else:
+            # Legacy approach: separate files per logger  
+            app_logs_dir = logs_dir / "application"
+            app_logs_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Main log file with rotation
+            log_file = app_logs_dir / f"{name}.log"
+            file_handler = logging.handlers.RotatingFileHandler(
+                log_file,
+                maxBytes=self._config['max_file_size'],
+                backupCount=self._config['backup_count'],
+                encoding='utf-8'
+            )
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
+            
+            # Separate error log file if configured
+            if self._config['separate_error_log']:
+                error_log_file = app_logs_dir / f"{name}_errors.log"
+                error_handler = logging.handlers.RotatingFileHandler(
+                    error_log_file,
+                    maxBytes=self._config['max_file_size'],
+                    backupCount=self._config['backup_count'],
+                    encoding='utf-8'
+                )
+                error_handler.setLevel(logging.ERROR)
+                error_handler.setFormatter(formatter)
+                logger.addHandler(error_handler)
     
     def get_logger(self, name: str) -> logging.Logger:
         """Get existing logger or create new one with default settings."""
@@ -210,6 +261,21 @@ class EnhancedLogger:
     def configure_from_dict(self, config: Dict[str, Any]):
         """Configure logging from dictionary."""
         self._config.update(config)
+        # Update existing loggers with new configuration
+        self._update_existing_loggers()
+    
+    def _update_existing_loggers(self):
+        """Update all existing loggers with current configuration."""
+        for name, logger in self._loggers.items():
+            level = self._config.get('log_level', 'INFO')
+            logger.setLevel(getattr(logging, level.upper()))
+    
+    def reload_config_from_ini(self):
+        """Reload configuration from config.ini file."""
+        new_config = self._load_default_config()
+        self._config.update(new_config)
+        self._update_existing_loggers()
+        return self._config
     
     def configure_from_file(self, config_file: Union[str, Path]):
         """Configure logging from JSON config file."""
@@ -277,6 +343,13 @@ config_file = os.getenv('LOG_CONFIG_FILE')
 if config_file and Path(config_file).exists():
     _enhanced_logger.configure_from_file(config_file)
 
+# Ensure logging level is INFO or DEBUG on startup
+try:
+    ensure_log_level_info_or_debug()
+except Exception:
+    # If there's an issue with config loading, ensure we have at least INFO level
+    _enhanced_logger.configure_from_dict({'log_level': 'INFO'})
+
 
 def setup_logger(
     name: str, 
@@ -320,6 +393,79 @@ def configure_logging(config: Dict[str, Any]):
 def configure_logging_from_file(config_file: Union[str, Path]):
     """Configure logging from file."""
     _enhanced_logger.configure_from_file(config_file)
+
+
+def reload_config_from_ini():
+    """Reload logging configuration from config.ini file."""
+    return _enhanced_logger.reload_config_from_ini()
+
+
+def set_log_level(level: str):
+    """Set log level for all loggers and update configuration."""
+    level = level.upper()
+    if level not in ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']:
+        raise ValueError(f"Invalid log level: {level}")
+    
+    _enhanced_logger.configure_from_dict({'log_level': level})
+    return level
+
+
+def get_current_log_level():
+    """Get current log level from configuration."""
+    return _enhanced_logger._config.get('log_level', 'INFO')
+
+
+def ensure_log_level_info_or_debug():
+    """Ensure log level is set to INFO or DEBUG (not higher)."""
+    current_level = get_current_log_level().upper()
+    
+    # If current level is WARNING, ERROR, or CRITICAL, set to INFO
+    if current_level in ['WARNING', 'ERROR', 'CRITICAL']:
+        print(f"Current log level {current_level} is too high. Setting to INFO.")
+        set_log_level('INFO')
+        return 'INFO'
+    
+    # If already INFO or DEBUG, keep as is
+    return current_level
+
+
+def initialize_test_logging():
+    """Initialize logging for test execution with proper configuration."""
+    # Ensure we have appropriate log level
+    ensure_log_level_info_or_debug()
+    
+    # Reload config from ini file to get latest settings
+    config = reload_config_from_ini()
+    
+    logger.info("Test logging initialized")
+    logger.info(f"Active log level: {get_current_log_level()}")
+    
+    return config
+
+
+def log_test_step(step_name: str, **context):
+    """Log a test step with context information."""
+    context_str = ', '.join(f'{k}={v}' for k, v in context.items()) if context else ''
+    message = f"Test Step: {step_name}"
+    if context_str:
+        message += f" | Context: {context_str}"
+    
+    test_logger.info(message)
+
+
+def log_test_result(test_name: str, status: str, **details):
+    """Log test result with details."""
+    details_str = ', '.join(f'{k}={v}' for k, v in details.items()) if details else ''
+    message = f"Test Result: {test_name} - {status.upper()}"
+    if details_str:
+        message += f" | Details: {details_str}"
+    
+    if status.upper() in ['PASSED', 'SUCCESS']:
+        test_logger.info(message)
+    elif status.upper() in ['FAILED', 'ERROR']:
+        test_logger.error(message)
+    else:
+        test_logger.warning(message)
 
 
 @contextmanager
@@ -383,6 +529,10 @@ connection_logger = setup_logger("database_connection")
 __all__ = [
     # Main functions
     'setup_logger', 'get_logger', 'configure_logging', 'configure_logging_from_file',
+    
+    # Configuration management
+    'reload_config_from_ini', 'set_log_level', 'get_current_log_level', 'ensure_log_level_info_or_debug',
+    'initialize_test_logging', 'log_test_step', 'log_test_result',
     
     # Context and utilities
     'log_context', 'log_performance', 'log_exception', 'log_execution_time',

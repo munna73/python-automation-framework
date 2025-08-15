@@ -8,3 +8,6 @@ SQLAlchemy
 pymongo
 PyYAML
 kafka-python
+
+# HTML Reporting (custom implementation - no additional dependencies needed)
+# The framework includes a built-in HTML report generator

@@ -24,6 +24,8 @@ import warnings
 # Import your existing config loader
 from utils.config_loader import ConfigLoader
 from utils.custom_exceptions import ConfigurationError
+# Import on-demand configuration helpers
+from utils.config_helper import get_config_helper, load_db_config_when_needed, load_config_value_when_needed
 
 # Import your existing logger
 try:
@@ -372,7 +374,7 @@ class EnhancedDatabaseComparisonManager:
         
         return value_str
         
-    def execute_query(self, engine: Any, query: str, connection_type: str = "unknown") -> pd.DataFrame:
+    def execute_query(self, engine: Any, query: str, connection_type: str = "unknown", query_key: Optional[str] = None) -> pd.DataFrame:
         """Execute query with enhanced error handling and performance monitoring"""
         if engine is None:
             raise ValueError(f"Database engine is None for {connection_type}. Establish connection first.")
@@ -380,7 +382,9 @@ class EnhancedDatabaseComparisonManager:
         self.performance_monitor.start_timer(f'{connection_type}_query_execution')
         
         try:
-            logger.info(f"Executing {connection_type} query: {query[:100]}{'...' if len(query) > 100 else ''}")
+            # Enhanced logging with query key information
+            query_info = f"query '{query_key}'" if query_key else "query"
+            logger.info(f"Executing {connection_type} {query_info}: {query[:100]}{'...' if len(query) > 100 else ''}")
             
             # Enhanced connection handling
             if isinstance(engine, cx_Oracle.Connection):
@@ -388,7 +392,11 @@ class EnhancedDatabaseComparisonManager:
             else:
                 df = self._execute_postgres_query(engine, query, connection_type)
             
-            logger.info(f"{connection_type} query executed successfully. Retrieved {len(df)} rows, {len(df.columns)} columns")
+            # Enhanced success logging with query key
+            success_msg = f"{connection_type} query"
+            if query_key:
+                success_msg = f"{connection_type} query '{query_key}'"
+            logger.info(f"{success_msg} executed successfully. Retrieved {len(df)} rows, {len(df.columns)} columns")
             
             # Clean the data
             cleaned_df = self.clean_data(df)
@@ -1257,25 +1265,39 @@ db_comparison_manager = EnhancedDatabaseComparisonManager()
 
 @given('I load configuration from "{config_file}"')
 def load_configuration_from_file(context, config_file):
-    """Load configuration from specified config file in config directory"""
+    """Initialize configuration loader for on-demand loading"""
     try:
-        # Initialize ConfigLoader with config directory
-        config_loader = ConfigLoader(config_dir="config")
-        config_loader.load_config_file(config_file)
-        db_comparison_manager.set_config_loader(config_loader)
-        context.config_loader = config_loader
+        # Initialize ConfigLoader for on-demand use
+        if not hasattr(context, 'config_loader') or context.config_loader is None:
+            config_loader = ConfigLoader(config_dir="config")
+            context.config_loader = config_loader
+            logger.info(f"✅ Configuration loader initialized for: {config_file}")
         
-        # Verify the config file path
+        # Initialize config helper for this context
+        config_helper = get_config_helper(context)
+        logger.info(f"✅ On-demand configuration helper ready")
+        
+        # Verify the config file exists
         config_path = Path("config") / config_file
-        logger.info(f"Configuration loaded from: {config_path}")
+        if not config_path.exists():
+            raise ConfigurationError(f"Configuration file not found: {config_path}")
+        
+        logger.info(f"Configuration file available: {config_path}")
         
     except Exception as e:
-        raise ConfigurationError(f"Failed to load configuration from 'config/{config_file}': {str(e)}")
+        raise ConfigurationError(f"Failed to initialize configuration for '{config_file}': {str(e)}")
 
 @given('I connect to Oracle database using "{db_section}" configuration')
 def connect_to_oracle(context, db_section):
-    """Establish connection to Oracle database using specified config section"""
+    """Establish connection to Oracle database using on-demand config loading"""
     try:
+        logger.info(f"🔄 Loading Oracle configuration for section: {db_section}")
+        
+        # Load database configuration on-demand
+        db_config = load_db_config_when_needed(context, db_section)
+        logger.info(f"✅ Oracle config loaded: {db_config.host}:{db_config.port}/{db_config.database}")
+        
+        # Create connection using the loaded config
         oracle_engine = db_comparison_manager.get_oracle_connection(db_section)
         
         # Store in both context and manager for reuse
@@ -1283,16 +1305,32 @@ def connect_to_oracle(context, db_section):
         context.oracle_section = db_section
         
         assert context.oracle_engine is not None, f"Failed to connect to Oracle database using section '{db_section}'"
-        logger.info(f"Oracle connection validated successfully for section: {db_section}")
+        logger.info(f"✅ Oracle connection established for section: {db_section}")
         
     except Exception as e:
-        logger.error(f"Oracle connection failed: {str(e)}")
+        logger.error(f"❌ Oracle connection failed for {db_section}: {str(e)}")
+        
+        # Provide helpful hints based on error type
+        error_msg = str(e).lower()
+        if 'environment variable' in error_msg:
+            logger.error(f"💡 Hint: Set environment variable for {db_section}")
+            logger.error(f"   Example: export {db_section}_PWD=your_password")
+        elif 'listener' in error_msg or 'connection' in error_msg:
+            logger.error(f"💡 Hint: Check if Oracle database is running and accessible")
+        
         raise
 
 @given('I connect to PostgreSQL database using "{db_section}" configuration')
 def connect_to_postgres(context, db_section):
-    """Establish connection to PostgreSQL database using specified config section"""
+    """Establish connection to PostgreSQL database using on-demand config loading"""
     try:
+        logger.info(f"🔄 Loading PostgreSQL configuration for section: {db_section}")
+        
+        # Load database configuration on-demand
+        db_config = load_db_config_when_needed(context, db_section)
+        logger.info(f"✅ PostgreSQL config loaded: {db_config.host}:{db_config.port}/{db_config.database}")
+        
+        # Create connection using the loaded config
         postgres_engine = db_comparison_manager.get_postgres_connection(db_section)
         
         # Store in both context and manager for reuse
@@ -1300,10 +1338,19 @@ def connect_to_postgres(context, db_section):
         context.postgres_section = db_section
         
         assert context.postgres_engine is not None, f"Failed to connect to PostgreSQL database using section '{db_section}'"
-        logger.info(f"PostgreSQL connection validated successfully for section: {db_section}")
+        logger.info(f"✅ PostgreSQL connection established for section: {db_section}")
         
     except Exception as e:
-        logger.error(f"PostgreSQL connection failed: {str(e)}")
+        logger.error(f"❌ PostgreSQL connection failed for {db_section}: {str(e)}")
+        
+        # Provide helpful hints based on error type
+        error_msg = str(e).lower()
+        if 'environment variable' in error_msg:
+            logger.error(f"💡 Hint: Set environment variable for {db_section}")
+            logger.error(f"   Example: export {db_section}_PWD=your_password")
+        elif 'connection' in error_msg or 'refused' in error_msg:
+            logger.error(f"💡 Hint: Check if PostgreSQL database is running and accessible")
+        
         raise
 
 # Enhanced execution steps with better error handling
@@ -1316,8 +1363,11 @@ def execute_oracle_query_as_source(context):
         if not hasattr(context, 'oracle_engine') or context.oracle_engine is None:
             raise ValueError("Oracle connection not established")
         
+        # Get query key for better logging
+        query_key = getattr(context, 'current_query_key', None)
+        
         db_comparison_manager.source_df = db_comparison_manager.execute_query(
-            context.oracle_engine, context.current_query, "Oracle"
+            context.oracle_engine, context.current_query, "Oracle", query_key
         )
         
         if db_comparison_manager.source_df is not None:
@@ -1331,10 +1381,11 @@ def execute_oracle_query_as_source(context):
         logger.error(f"Failed to execute Oracle query as source: {str(e)}")
         raise
 
-# Enhanced comparison step with validation
+# Enhanced comparison step with validation - removed duplicate
+
 @when('I compare DataFrames using primary key "{primary_key}"')
-def compare_dataframes_with_specified_primary_key(context, primary_key):
-    """Compare DataFrames using specified primary key with enhanced validation"""
+def compare_dataframes_basic(context, primary_key):
+    """Compare DataFrames using specified primary key (basic version)"""
     try:
         # Validate inputs before comparison
         if db_comparison_manager.source_df is None:
@@ -1345,10 +1396,355 @@ def compare_dataframes_with_specified_primary_key(context, primary_key):
         context.comparison_results = db_comparison_manager.compare_dataframes(
             primary_key, omit_columns=None, omit_values=None
         )
-        logger.info(f"Enhanced comparison completed using primary key: {primary_key}")
+        logger.info(f"Basic comparison completed using primary key: {primary_key}")
         
     except Exception as e:
         logger.error(f"Failed to compare DataFrames: {str(e)}")
+        raise
+
+@when('I compare DataFrames using primary key from config section "{section_name}"')
+def compare_dataframes_from_config(context, section_name):
+    """Compare DataFrames using primary key from config section"""
+    try:
+        # Load primary key configuration on-demand
+        logger.info(f"🔄 Loading primary key from config section: {section_name}")
+        primary_key = load_config_value_when_needed(context, section_name, 'primary_key')
+        logger.info(f"✅ Primary key loaded: {primary_key}")
+        
+        # Validate inputs before comparison
+        if db_comparison_manager.source_df is None:
+            raise ValueError("Source DataFrame is None")
+        if db_comparison_manager.target_df is None:
+            raise ValueError("Target DataFrame is None")
+        
+        context.comparison_results = db_comparison_manager.compare_dataframes(
+            primary_key, omit_columns=None, omit_values=None
+        )
+        logger.info(f"Config-driven comparison completed using primary key: {primary_key}")
+        
+    except Exception as e:
+        logger.error(f"Failed to compare DataFrames from config: {str(e)}")
+        raise
+
+
+
+@when('I load source data using table from config section "{section_name}" key "{table_key}" on Oracle')
+def load_source_data_from_config_oracle(context, section_name, table_key):
+    """Load source data from Oracle using table name from config"""
+    try:
+        if not hasattr(context, 'config_loader') or context.config_loader is None:
+            raise ValueError("Configuration not loaded. Load config first.")
+        if not hasattr(context, 'oracle_engine') or context.oracle_engine is None:
+            raise ValueError("Oracle connection not established")
+        
+        table_name = context.config_loader.get_custom_config(section_name, table_key)
+        query = f"SELECT * FROM {table_name}"
+        query_key = f"{section_name}.{table_key}"
+        
+        db_comparison_manager.source_df = db_comparison_manager.execute_query(
+            context.oracle_engine, query, "Oracle", query_key
+        )
+        
+        if db_comparison_manager.source_df is not None:
+            context.source_record_count = len(db_comparison_manager.source_df)
+            logger.info(f"Source DataFrame loaded from {table_name}: {context.source_record_count} records")
+        else:
+            context.source_record_count = 0
+            logger.warning("Source DataFrame is None")
+            
+    except Exception as e:
+        logger.error(f"Failed to load source data from config: {str(e)}")
+        raise
+
+@when('I load target data using table from config section "{section_name}" key "{table_key}" on PostgreSQL')
+def load_target_data_from_config_postgres(context, section_name, table_key):
+    """Load target data from PostgreSQL using table name from config"""
+    try:
+        if not hasattr(context, 'config_loader') or context.config_loader is None:
+            raise ValueError("Configuration not loaded. Load config first.")
+        if not hasattr(context, 'postgres_engine') or context.postgres_engine is None:
+            raise ValueError("PostgreSQL connection not established")
+        
+        table_name = context.config_loader.get_custom_config(section_name, table_key)
+        query = f"SELECT * FROM {table_name}"
+        query_key = f"{section_name}.{table_key}"
+        
+        db_comparison_manager.target_df = db_comparison_manager.execute_query(
+            context.postgres_engine, query, "PostgreSQL", query_key
+        )
+        
+        if db_comparison_manager.target_df is not None:
+            context.target_record_count = len(db_comparison_manager.target_df)
+            logger.info(f"Target DataFrame loaded from {table_name}: {context.target_record_count} records")
+        else:
+            context.target_record_count = 0
+            logger.warning("Target DataFrame is None")
+            
+    except Exception as e:
+        logger.error(f"Failed to load target data from config: {str(e)}")
+        raise
+
+@when('I execute direct query "{query}" on Oracle as source')
+def execute_direct_oracle_query_as_source(context, query):
+    """Execute direct Oracle query and store as source DataFrame"""
+    try:
+        if not hasattr(context, 'oracle_engine') or context.oracle_engine is None:
+            raise ValueError("Oracle connection not established")
+        
+        db_comparison_manager.source_df = db_comparison_manager.execute_query(
+            context.oracle_engine, query, "Oracle", "direct_query"
+        )
+        
+        if db_comparison_manager.source_df is not None:
+            context.source_record_count = len(db_comparison_manager.source_df)
+            logger.info(f"Source DataFrame loaded: {context.source_record_count} records")
+        else:
+            context.source_record_count = 0
+            logger.warning("Source DataFrame is None")
+            
+    except Exception as e:
+        logger.error(f"Failed to execute Oracle direct query as source: {str(e)}")
+        raise
+
+@when('I execute direct query "{query}" on PostgreSQL as target')
+def execute_direct_postgres_query_as_target(context, query):
+    """Execute direct PostgreSQL query and store as target DataFrame"""
+    try:
+        if not hasattr(context, 'postgres_engine') or context.postgres_engine is None:
+            raise ValueError("PostgreSQL connection not established")
+        
+        db_comparison_manager.target_df = db_comparison_manager.execute_query(
+            context.postgres_engine, query, "PostgreSQL", "direct_query"
+        )
+        
+        if db_comparison_manager.target_df is not None:
+            context.target_record_count = len(db_comparison_manager.target_df)
+            logger.info(f"Target DataFrame loaded: {context.target_record_count} records")
+        else:
+            context.target_record_count = 0
+            logger.warning("Target DataFrame is None")
+            
+    except Exception as e:
+        logger.error(f"Failed to execute PostgreSQL direct query as target: {str(e)}")
+        raise
+
+@when('I execute direct query "{query}" on PostgreSQL as source')
+def execute_direct_postgres_query_as_source(context, query):
+    """Execute direct PostgreSQL query and store as source DataFrame"""
+    try:
+        if not hasattr(context, 'postgres_engine') or context.postgres_engine is None:
+            raise ValueError("PostgreSQL connection not established")
+        
+        db_comparison_manager.source_df = db_comparison_manager.execute_query(
+            context.postgres_engine, query, "PostgreSQL", "direct_query"
+        )
+        
+        if db_comparison_manager.source_df is not None:
+            context.source_record_count = len(db_comparison_manager.source_df)
+            logger.info(f"Source DataFrame loaded: {context.source_record_count} records")
+        else:
+            context.source_record_count = 0
+            logger.warning("Source DataFrame is None")
+            
+    except Exception as e:
+        logger.error(f"Failed to execute PostgreSQL direct query as source: {str(e)}")
+        raise
+
+@when('I execute direct query "{query}" on Oracle as target')
+def execute_direct_oracle_query_as_target(context, query):
+    """Execute direct Oracle query and store as target DataFrame"""
+    try:
+        if not hasattr(context, 'oracle_engine') or context.oracle_engine is None:
+            raise ValueError("Oracle connection not established")
+        
+        db_comparison_manager.target_df = db_comparison_manager.execute_query(
+            context.oracle_engine, query, "Oracle", "direct_query"
+        )
+        
+        if db_comparison_manager.target_df is not None:
+            context.target_record_count = len(db_comparison_manager.target_df)
+            logger.info(f"Target DataFrame loaded: {context.target_record_count} records")
+        else:
+            context.target_record_count = 0
+            logger.warning("Target DataFrame is None")
+            
+    except Exception as e:
+        logger.error(f"Failed to execute Oracle direct query as target: {str(e)}")
+        raise
+
+@then('source DataFrame should have no duplicate records')
+def verify_source_no_duplicates(context):
+    """Verify source DataFrame has no duplicate records"""
+    if db_comparison_manager.source_df is None:
+        raise ValueError("Source DataFrame is None - no data was loaded")
+    
+    duplicate_count = db_comparison_manager.source_df.duplicated().sum()
+    assert duplicate_count == 0, (
+        f"Source DataFrame has {duplicate_count} duplicate records"
+    )
+    logger.info("Source DataFrame duplicate check passed: no duplicates found")
+
+@then('target DataFrame should have no duplicate records')
+def verify_target_no_duplicates(context):
+    """Verify target DataFrame has no duplicate records"""
+    if db_comparison_manager.target_df is None:
+        raise ValueError("Target DataFrame is None - no data was loaded")
+    
+    duplicate_count = db_comparison_manager.target_df.duplicated().sum()
+    assert duplicate_count == 0, (
+        f"Target DataFrame has {duplicate_count} duplicate records"
+    )
+    logger.info("Target DataFrame duplicate check passed: no duplicates found")
+
+@then('there should be no missing records in either DataFrame')
+def verify_no_missing_records(context):
+    """Verify there are no missing records between source and target"""
+    if not hasattr(context, 'comparison_results'):
+        raise ValueError("No comparison results available")
+    
+    missing_in_target = len(context.comparison_results['missing_in_target'])
+    missing_in_source = len(context.comparison_results['missing_in_source'])
+    
+    assert missing_in_target == 0, f"Found {missing_in_target} records missing in target"
+    assert missing_in_source == 0, f"Found {missing_in_source} records missing in source"
+    
+    logger.info("Missing records check passed: no missing records found")
+
+@then('all fields should match between source and target DataFrames')
+def verify_all_fields_match(context):
+    """Verify all fields match between source and target DataFrames"""
+    if not hasattr(context, 'comparison_results'):
+        raise ValueError("No comparison results available")
+    
+    field_deltas = context.comparison_results['field_deltas']
+    total_deltas = sum(len(deltas) for deltas in field_deltas.values())
+    
+    assert total_deltas == 0, f"Found {total_deltas} field differences"
+    logger.info("Field comparison check passed: all fields match")
+
+@then('there should be "{expected_count:d}" records missing in target')
+def verify_missing_in_target_count(context, expected_count):
+    """Verify expected count of records missing in target"""
+    if not hasattr(context, 'comparison_results'):
+        raise ValueError("No comparison results available")
+    
+    actual_count = len(context.comparison_results['missing_in_target'])
+    assert actual_count == expected_count, (
+        f"Expected {expected_count} records missing in target, found {actual_count}"
+    )
+    logger.info(f"Missing in target verification passed: {actual_count} records")
+
+@then('there should be "{expected_count:d}" records missing in source')
+def verify_missing_in_source_count(context, expected_count):
+    """Verify expected count of records missing in source"""
+    if not hasattr(context, 'comparison_results'):
+        raise ValueError("No comparison results available")
+    
+    actual_count = len(context.comparison_results['missing_in_source'])
+    assert actual_count == expected_count, (
+        f"Expected {expected_count} records missing in source, found {actual_count}"
+    )
+    logger.info(f"Missing in source verification passed: {actual_count} records")
+
+@then('field "{field_name}" should have "{expected_count:d}" delta records')
+def verify_field_delta_count(context, field_name, expected_count):
+    """Verify expected count of delta records for specific field"""
+    if not hasattr(context, 'comparison_results'):
+        raise ValueError("No comparison results available")
+    
+    field_deltas = context.comparison_results['field_deltas']
+    if field_name not in field_deltas:
+        actual_count = 0
+    else:
+        actual_count = len(field_deltas[field_name])
+    
+    assert actual_count == expected_count, (
+        f"Expected {expected_count} delta records for field '{field_name}', found {actual_count}"
+    )
+    logger.info(f"Field delta verification passed for '{field_name}': {actual_count} deltas")
+
+@then('I print the comparison summary')
+def print_comparison_summary(context):
+    """Print detailed comparison summary"""
+    if not hasattr(context, 'comparison_results'):
+        raise ValueError("No comparison results available")
+    
+    results = context.comparison_results
+    print("\n" + "="*60)
+    print("COMPARISON SUMMARY")
+    print("="*60)
+    print(f"Source Records: {results['total_source_records']:,}")
+    print(f"Target Records: {results['total_target_records']:,}")
+    print(f"Common Records: {results['common_records']:,}")
+    print(f"Missing in Target: {len(results['missing_in_target']):,}")
+    print(f"Missing in Source: {len(results['missing_in_source']):,}")
+    print(f"Primary Key: {results['primary_key']}")
+    print(f"Common Columns: {len(results['common_columns'])}")
+    print(f"Columns Compared: {len(results['columns_compared'])}")
+    
+    if results['field_deltas']:
+        print("\nField Differences:")
+        total_deltas = 0
+        for field, deltas in results['field_deltas'].items():
+            delta_count = len(deltas)
+            total_deltas += delta_count
+            if delta_count > 0:
+                print(f"  {field}: {delta_count:,} differences")
+        print(f"Total Field Differences: {total_deltas:,}")
+    
+    print("="*60)
+    logger.info("Comparison summary displayed")
+
+@then('I print DataFrame info for source')
+def print_source_dataframe_info(context):
+    """Print detailed information about source DataFrame"""
+    if db_comparison_manager.source_df is None:
+        print("Source DataFrame: None")
+        return
+    
+    df = db_comparison_manager.source_df
+    print("\n" + "="*50)
+    print("SOURCE DATAFRAME INFO")
+    print("="*50)
+    print(f"Shape: {df.shape}")
+    print(f"Columns: {list(df.columns)}")
+    print(f"Data Types:\n{df.dtypes}")
+    print(f"Memory Usage: {df.memory_usage(deep=True).sum() / 1024 / 1024:.2f} MB")
+    print(f"Null Values:\n{df.isnull().sum()}")
+    print("="*50)
+    logger.info("Source DataFrame info displayed")
+
+@then('I print DataFrame info for target')
+def print_target_dataframe_info(context):
+    """Print detailed information about target DataFrame"""
+    if db_comparison_manager.target_df is None:
+        print("Target DataFrame: None")
+        return
+    
+    df = db_comparison_manager.target_df
+    print("\n" + "="*50)
+    print("TARGET DATAFRAME INFO")
+    print("="*50)
+    print(f"Shape: {df.shape}")
+    print(f"Columns: {list(df.columns)}")
+    print(f"Data Types:\n{df.dtypes}")
+    print(f"Memory Usage: {df.memory_usage(deep=True).sum() / 1024 / 1024:.2f} MB")
+    print(f"Null Values:\n{df.isnull().sum()}")
+    print("="*50)
+    logger.info("Target DataFrame info displayed")
+
+@then('I export source DataFrame to CSV "{filename}"')
+def export_source_dataframe_to_csv(context, filename):
+    """Export source DataFrame to CSV file"""
+    try:
+        if db_comparison_manager.source_df is None:
+            raise ValueError("Source DataFrame is None")
+        
+        db_comparison_manager.export_to_csv(filename, 'source')
+        logger.info(f"Source DataFrame exported to CSV: {filename}")
+        
+    except Exception as e:
+        logger.error(f"Failed to export source DataFrame to CSV: {str(e)}")
         raise
 
 # Enhanced export step with comprehensive output
@@ -1482,6 +1878,7 @@ def read_query_from_config(context, section_name, query_key):
                 logger.warning(f"Potentially dangerous SQL pattern '{pattern}' found in query")
         
         context.current_query = query
+        context.current_query_key = f"{section_name}.{query_key}"  # Store the query key for logging
         logger.debug(f"Query loaded from {section_name}.{query_key} (length: {len(query)} characters)")
         
     except Exception as e:
@@ -1498,8 +1895,11 @@ def execute_postgres_query_as_source(context):
         if not hasattr(context, 'postgres_engine') or context.postgres_engine is None:
             raise ValueError("PostgreSQL connection not established")
         
+        # Get query key for better logging
+        query_key = getattr(context, 'current_query_key', None)
+        
         db_comparison_manager.source_df = db_comparison_manager.execute_query(
-            context.postgres_engine, context.current_query, "PostgreSQL"
+            context.postgres_engine, context.current_query, "PostgreSQL", query_key
         )
         
         if db_comparison_manager.source_df is not None:
@@ -1522,8 +1922,11 @@ def execute_oracle_query_as_target(context):
         if not hasattr(context, 'oracle_engine') or context.oracle_engine is None:
             raise ValueError("Oracle connection not established")
         
+        # Get query key for better logging
+        query_key = getattr(context, 'current_query_key', None)
+        
         db_comparison_manager.target_df = db_comparison_manager.execute_query(
-            context.oracle_engine, context.current_query, "Oracle"
+            context.oracle_engine, context.current_query, "Oracle", query_key
         )
         
         if db_comparison_manager.target_df is not None:
@@ -1546,8 +1949,11 @@ def execute_postgres_query_as_target(context):
         if not hasattr(context, 'postgres_engine') or context.postgres_engine is None:
             raise ValueError("PostgreSQL connection not established")
         
+        # Get query key for better logging
+        query_key = getattr(context, 'current_query_key', None)
+        
         db_comparison_manager.target_df = db_comparison_manager.execute_query(
-            context.postgres_engine, context.current_query, "PostgreSQL"
+            context.postgres_engine, context.current_query, "PostgreSQL", query_key
         )
         
         if db_comparison_manager.target_df is not None:
@@ -1561,8 +1967,8 @@ def execute_postgres_query_as_target(context):
         logger.error(f"Failed to execute PostgreSQL query as target: {str(e)}")
         raise
 
-# Enhanced comparison steps with omit options
-@when('I compare DataFrames using primary key "{primary_key}" omitting columns "{omit_columns}"')
+# Enhanced comparison steps with omit options - using distinct patterns
+@when('I perform DataFrame comparison using primary key "{primary_key}" with omitted columns "{omit_columns}"')
 def compare_dataframes_with_omit_columns(context, primary_key, omit_columns):
     """Compare DataFrames using specified primary key and omitting specified columns"""
     try:
@@ -1578,7 +1984,7 @@ def compare_dataframes_with_omit_columns(context, primary_key, omit_columns):
         logger.error(f"Failed to compare DataFrames: {str(e)}")
         raise
 
-@when('I compare DataFrames using primary key "{primary_key}" omitting values "{omit_values}"')
+@when('I perform DataFrame comparison using primary key "{primary_key}" with omitted values "{omit_values}"')
 def compare_dataframes_with_omit_values(context, primary_key, omit_values):
     """Compare DataFrames using specified primary key and treating specified values as equal"""
     try:
@@ -1594,24 +2000,7 @@ def compare_dataframes_with_omit_values(context, primary_key, omit_values):
         logger.error(f"Failed to compare DataFrames: {str(e)}")
         raise
 
-@when('I compare DataFrames using primary key "{primary_key}" omitting columns "{omit_columns}" and values "{omit_values}"')
-def compare_dataframes_with_omit_columns_and_values(context, primary_key, omit_columns, omit_values):
-    """Compare DataFrames using specified primary key with both column and value omissions"""
-    try:
-        # Parse comma-separated column names and values
-        omit_columns_list = [col.strip() for col in omit_columns.split(',') if col.strip()]
-        omit_values_list = [val.strip() for val in omit_values.split(',') if val.strip()]
-        
-        context.comparison_results = db_comparison_manager.compare_dataframes(
-            primary_key, omit_columns=omit_columns_list, omit_values=omit_values_list
-        )
-        logger.info(f"Enhanced comparison completed using primary key: {primary_key}")
-        logger.info(f"Omitting columns: {omit_columns_list}")
-        logger.info(f"Treating as equal: {omit_values_list}")
-        
-    except Exception as e:
-        logger.error(f"Failed to compare DataFrames: {str(e)}")
-        raise
+# Removed problematic step definition - Behave pattern conflicts resolved
 
 # Enhanced verification steps with better error messages
 @then('the source DataFrame should have "{expected_count:d}" records')
@@ -1891,4 +2280,189 @@ def enable_progress_monitoring(context):
         
     except Exception as e:
         logger.error(f"Failed to enable progress monitoring: {str(e)}")
+        raise
+
+
+# Additional step definitions for multiple specific database sections
+
+@given('I connect to Oracle database using "{db_section}" configuration as source')
+def connect_to_oracle_as_source(context, db_section):
+    """Connect to Oracle database as source for comparison"""
+    connect_to_oracle(context, db_section)
+    context.source_engine = context.oracle_engine
+    context.source_section = db_section
+    context.source_db_type = "Oracle"
+    logger.info(f"✅ Oracle source database connected: {db_section}")
+
+
+@given('I connect to Oracle database using "{db_section}" configuration as target')
+def connect_to_oracle_as_target(context, db_section):
+    """Connect to Oracle database as target for comparison"""
+    # Create a separate connection for target
+    try:
+        db_config = load_db_config_when_needed(context, db_section)
+        connection_string = f"oracle+cx_oracle://{db_config.username}:{db_config.password}@{db_config.host}:{db_config.port}/?service_name={db_config.database}"
+        context.target_oracle_engine = create_engine(connection_string, echo=False)
+        context.target_section = db_section
+        context.target_db_type = "Oracle"
+        logger.info(f"✅ Oracle target database connected: {db_section}")
+    except Exception as e:
+        logger.error(f"❌ Failed to connect to Oracle target database '{db_section}': {str(e)}")
+        raise
+
+
+@given('I connect to PostgreSQL database using "{db_section}" configuration as source')
+def connect_to_postgres_as_source(context, db_section):
+    """Connect to PostgreSQL database as source for comparison"""
+    connect_to_postgres(context, db_section)
+    context.source_engine = context.postgres_engine
+    context.source_section = db_section
+    context.source_db_type = "PostgreSQL"
+    logger.info(f"✅ PostgreSQL source database connected: {db_section}")
+
+
+@given('I connect to PostgreSQL database using "{db_section}" configuration as target')
+def connect_to_postgres_as_target(context, db_section):
+    """Connect to PostgreSQL database as target for comparison"""
+    # Create a separate connection for target
+    try:
+        db_config = load_db_config_when_needed(context, db_section)
+        connection_string = f"postgresql://{db_config.username}:{db_config.password}@{db_config.host}:{db_config.port}/{db_config.database}"
+        context.target_postgres_engine = create_engine(connection_string, echo=False)
+        context.target_section = db_section
+        context.target_db_type = "PostgreSQL"
+        logger.info(f"✅ PostgreSQL target database connected: {db_section}")
+    except Exception as e:
+        logger.error(f"❌ Failed to connect to PostgreSQL target database '{db_section}': {str(e)}")
+        raise
+
+
+@given('I connect to Oracle database using "{db_section}" configuration as secondary')
+def connect_to_oracle_as_secondary(context, db_section):
+    """Connect to Oracle database as secondary connection"""
+    try:
+        db_config = load_db_config_when_needed(context, db_section)
+        connection_string = f"oracle+cx_oracle://{db_config.username}:{db_config.password}@{db_config.host}:{db_config.port}/?service_name={db_config.database}"
+        context.secondary_oracle_engine = create_engine(connection_string, echo=False)
+        context.secondary_oracle_section = db_section
+        logger.info(f"✅ Oracle secondary database connected: {db_section}")
+    except Exception as e:
+        logger.error(f"❌ Failed to connect to Oracle secondary database '{db_section}': {str(e)}")
+        raise
+
+
+@given('I connect to PostgreSQL database using "{db_section}" configuration as secondary')
+def connect_to_postgres_as_secondary(context, db_section):
+    """Connect to PostgreSQL database as secondary connection"""
+    try:
+        db_config = load_db_config_when_needed(context, db_section)
+        connection_string = f"postgresql://{db_config.username}:{db_config.password}@{db_config.host}:{db_config.port}/{db_config.database}"
+        context.secondary_postgres_engine = create_engine(connection_string, echo=False)
+        context.secondary_postgres_section = db_section
+        logger.info(f"✅ PostgreSQL secondary database connected: {db_section}")
+    except Exception as e:
+        logger.error(f"❌ Failed to connect to PostgreSQL secondary database '{db_section}': {str(e)}")
+        raise
+
+
+@when('I execute query on source database and store as source DataFrame')
+def execute_query_on_source_database(context):
+    """Execute current query on source database"""
+    try:
+        if not hasattr(context, 'source_engine') or context.source_engine is None:
+            raise ValueError("Source database connection not established")
+        if not hasattr(context, 'current_query'):
+            raise ValueError("No query loaded. Use 'read query from config' step first")
+        
+        # Get query key for better logging
+        query_key = getattr(context, 'current_query_key', None)
+        
+        db_comparison_manager.source_df = db_comparison_manager.execute_query(
+            context.source_engine, context.current_query, context.source_db_type, query_key
+        )
+        
+        if db_comparison_manager.source_df is not None:
+            context.source_record_count = len(db_comparison_manager.source_df)
+            logger.info(f"Source DataFrame loaded from {context.source_db_type}: {context.source_record_count} records")
+        else:
+            context.source_record_count = 0
+            logger.warning("Source DataFrame is None")
+            
+    except Exception as e:
+        logger.error(f"Failed to execute query on source {context.source_db_type}: {str(e)}")
+        raise
+
+
+@when('I execute query on target database and store as target DataFrame')
+def execute_query_on_target_database(context):
+    """Execute current query on target database"""
+    try:
+        # Determine target engine
+        target_engine = None
+        if hasattr(context, 'target_oracle_engine') and context.target_oracle_engine:
+            target_engine = context.target_oracle_engine
+        elif hasattr(context, 'target_postgres_engine') and context.target_postgres_engine:
+            target_engine = context.target_postgres_engine
+        
+        if target_engine is None:
+            raise ValueError("Target database connection not established")
+        if not hasattr(context, 'current_query'):
+            raise ValueError("No query loaded. Use 'read query from config' step first")
+        
+        # Get query key for better logging
+        query_key = getattr(context, 'current_query_key', None)
+        
+        db_comparison_manager.target_df = db_comparison_manager.execute_query(
+            target_engine, context.current_query, context.target_db_type, query_key
+        )
+        
+        if db_comparison_manager.target_df is not None:
+            context.target_record_count = len(db_comparison_manager.target_df)
+            logger.info(f"Target DataFrame loaded from {context.target_db_type}: {context.target_record_count} records")
+        else:
+            context.target_record_count = 0
+            logger.warning("Target DataFrame is None")
+            
+    except Exception as e:
+        logger.error(f"Failed to execute query on target {context.target_db_type}: {str(e)}")
+        raise
+
+
+@then('both databases should be accessible')
+def verify_both_databases_accessible(context):
+    """Verify that both primary and secondary databases are accessible"""
+    try:
+        connections_verified = 0
+        
+        # Check Oracle connections
+        if hasattr(context, 'oracle_engine') and context.oracle_engine:
+            with context.oracle_engine.connect() as conn:
+                conn.execute(text("SELECT 1 FROM DUAL"))
+            logger.info("✅ Primary Oracle database accessible")
+            connections_verified += 1
+            
+        if hasattr(context, 'secondary_oracle_engine') and context.secondary_oracle_engine:
+            with context.secondary_oracle_engine.connect() as conn:
+                conn.execute(text("SELECT 1 FROM DUAL"))
+            logger.info("✅ Secondary Oracle database accessible")
+            connections_verified += 1
+        
+        # Check PostgreSQL connections
+        if hasattr(context, 'postgres_engine') and context.postgres_engine:
+            with context.postgres_engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            logger.info("✅ Primary PostgreSQL database accessible")
+            connections_verified += 1
+            
+        if hasattr(context, 'secondary_postgres_engine') and context.secondary_postgres_engine:
+            with context.secondary_postgres_engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            logger.info("✅ Secondary PostgreSQL database accessible")
+            connections_verified += 1
+        
+        assert connections_verified >= 2, f"Expected at least 2 database connections, verified {connections_verified}"
+        logger.info(f"All {connections_verified} database connections are accessible")
+        
+    except Exception as e:
+        logger.error(f"Database accessibility verification failed: {str(e)}")
         raise

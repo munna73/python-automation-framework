@@ -23,27 +23,41 @@ except ImportError as e:
     print(f"Warning: Could not import Kafka cleanup function: {e}")
     kafka_after_scenario = None
 
-# Import your existing logger
+# Import your enhanced logger
 try:
-    from utils.logger import logger, test_logger
+    from utils.logger import logger, test_logger, initialize_test_logging, log_test_step, log_test_result
 except ImportError:
     import logging
     logger = logging.getLogger(__name__)
     test_logger = logger
+    initialize_test_logging = lambda: None
+    log_test_step = lambda *args, **kwargs: None
+    log_test_result = lambda *args, **kwargs: None
+
+# Configuration will be loaded on-demand by tests
 
 
 def before_all(context):
     """Setup before all tests."""
-    logger.info("Starting test execution with database comparison framework")
+    # Initialize enhanced logging configuration
+    log_config = initialize_test_logging()
+    logger.info("Starting test execution with enhanced database comparison framework")
+    logger.info(f"Logging configuration loaded: {log_config['log_level']}")
+    
     context.test_start_time = time.time()
     
-    # Initialize any global test configuration
+    # Initialize minimal test configuration - configs loaded on-demand
     context.test_config = {
         'start_time': context.test_start_time,
         'total_scenarios': 0,
         'passed_scenarios': 0,
-        'failed_scenarios': 0
+        'failed_scenarios': 0,
+        'log_config': log_config
     }
+    
+    # Initialize configuration cache for on-demand loading
+    context.config_cache = {}
+    context.config_loader = None
 
 
 def before_feature(context, feature):
@@ -59,7 +73,7 @@ def before_feature(context, feature):
 
 def before_scenario(context, scenario):
     """Setup before each scenario."""
-    test_logger.info(f"Starting scenario: {scenario.name}")
+    log_test_step(f"Starting scenario: {scenario.name}")
     context.scenario_start_time = time.time()
     
     # Reset any previous results
@@ -105,17 +119,16 @@ def after_scenario(context, scenario):
     context.feature_scenarios += 1
     
     if scenario.status.name == "passed":
-        test_logger.info(f"✓ Scenario passed: {scenario.name} (Duration: {scenario_duration:.2f}s)")
+        log_test_result(scenario.name, "passed", duration=f"{scenario_duration:.2f}s")
         context.test_config['passed_scenarios'] += 1
         context.feature_passed += 1
     else:
-        test_logger.error(f"✗ Scenario failed: {scenario.name} (Duration: {scenario_duration:.2f}s)")
+        error_details = {"duration": f"{scenario_duration:.2f}s"}
+        if hasattr(context, 'last_query_error') and context.last_query_error:
+            error_details["error"] = context.last_query_error
+        log_test_result(scenario.name, "failed", **error_details)
         context.test_config['failed_scenarios'] += 1
         context.feature_failed += 1
-        
-        # Log failure details if available
-        if hasattr(context, 'last_query_error') and context.last_query_error:
-            test_logger.error(f"Last error: {context.last_query_error}")
     
     # Clean up database connections using the new database comparison steps
     try:
@@ -278,5 +291,4 @@ def validate_environment_variables():
         logger.info("All required environment variables are set")
 
 
-# Call validation at module load time (optional)
-# validate_environment_variables()
+# No upfront validation - configuration loaded as needed by tests
