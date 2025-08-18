@@ -198,13 +198,27 @@ class EnhancedDatabaseComparisonManager:
     def _load_default_config(self, config_file: Optional[str] = None):
         """Load default configuration"""
         try:
+            # Initialize config_loader with the global instance
+            from utils.config_loader import config_loader as global_config_loader
+            self.config_loader = global_config_loader
+            logger.info("✅ DatabaseComparisonManager config_loader initialized")
+            
             if config_file:
                 config_path = Path("config") / config_file
                 if config_path.exists():
-                    # Load configuration settings
-                    pass
+                    logger.info(f"Using config file: {config_path}")
+                else:
+                    logger.warning(f"Config file not found: {config_path}")
         except Exception as e:
-            logger.warning(f"Could not load default config: {e}")
+            logger.error(f"Failed to load default config: {e}")
+            # Fallback: try to create new config loader instance
+            try:
+                from utils.config_loader import ConfigLoader
+                self.config_loader = ConfigLoader()
+                logger.info("✅ DatabaseComparisonManager config_loader initialized via fallback")
+            except Exception as fallback_error:
+                logger.error(f"Config loader fallback also failed: {fallback_error}")
+                self.config_loader = None
     
     def _get_output_directory(self) -> Path:
         """Get configurable output directory"""
