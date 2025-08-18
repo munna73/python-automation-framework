@@ -531,5 +531,12 @@ class KafkaMessageConsumer:
         """Context manager exit."""
         self.disconnect()
 
-# Global Kafka consumer instance
-kafka_consumer = KafkaMessageConsumer()
+# Global Kafka consumer instance - lazy initialization to support tag-aware config loading
+kafka_consumer = None
+
+def get_kafka_consumer():
+    """Get or create the global Kafka consumer instance with lazy initialization."""
+    global kafka_consumer
+    if kafka_consumer is None:
+        kafka_consumer = KafkaMessageConsumer()
+    return kafka_consumer

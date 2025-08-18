@@ -442,5 +442,12 @@ class KafkaMessageProducer:
         """Context manager exit."""
         self.disconnect()
 
-# Global Kafka producer instance
-kafka_producer = KafkaMessageProducer()
+# Global Kafka producer instance - lazy initialization to support tag-aware config loading
+kafka_producer = None
+
+def get_kafka_producer():
+    """Get or create the global Kafka producer instance with lazy initialization."""
+    global kafka_producer
+    if kafka_producer is None:
+        kafka_producer = KafkaMessageProducer()
+    return kafka_producer

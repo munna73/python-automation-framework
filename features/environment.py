@@ -34,7 +34,7 @@ except ImportError:
     log_test_step = lambda *args, **kwargs: None
     log_test_result = lambda *args, **kwargs: None
 
-# Configuration will be loaded on-demand by tests
+# Configuration will be loaded on-demand by tests with automatic tag detection
 
 
 def before_all(context):
@@ -76,6 +76,14 @@ def before_scenario(context, scenario):
     log_test_step(f"Starting scenario: {scenario.name}")
     context.scenario_start_time = time.time()
     
+    # Store scenario reference for automatic tag detection by config_loader
+    context.scenario = scenario
+    
+    # Log scenario tags for visibility
+    if scenario.tags:
+        logger.info(f"Scenario '{scenario.name}' tags: {scenario.tags}")
+        logger.debug("Config loader will automatically optimize loading based on these tags")
+    
     # Reset any previous results
     context.last_query_results = None
     context.last_query_error = None
@@ -105,9 +113,7 @@ def before_scenario(context, scenario):
     context.source_record_count = 0
     context.target_record_count = 0
     
-    # Initialize config loader reference
-    context.config_loader = None
-    context.config_loaded = False
+    # Config loader will be used automatically as needed - no manual setup required
 
 
 def after_scenario(context, scenario):
@@ -235,9 +241,11 @@ def after_step(context, step):
 # Tag-based setup
 def before_tag(context, tag):
     """Setup based on scenario tags."""
+    logger.debug(f"Processing tag: @{tag}")
+    
+    # Set tag-specific flags for backward compatibility
     if tag == "database":
         logger.debug("Setting up for database scenario")
-        # Initialize database-specific context if needed
         context.database_tag_active = True
     elif tag == "oracle":
         logger.debug("Setting up for Oracle scenario")
@@ -257,12 +265,15 @@ def before_tag(context, tag):
     elif tag == "validation":
         logger.debug("Setting up for data validation scenario")
         context.validation_tag_active = True
+    
+    # Configuration will be automatically optimized when config_loader is used
+    logger.debug(f"Tag @{tag} will automatically optimize configuration loading")
 
 
 def after_tag(context, tag):
     """Cleanup based on scenario tags."""
     if tag in ["database", "oracle", "postgres", "mongodb", "kafka", "comparison", "validation"]:
-        logger.debug(f"Cleaning up after {tag} scenario")
+        logger.debug(f"Cleaning up after @{tag} scenario")
         
         # Reset tag-specific flags
         tag_flag = f"{tag}_tag_active"
@@ -291,4 +302,5 @@ def validate_environment_variables():
         logger.info("All required environment variables are set")
 
 
-# No upfront validation - configuration loaded as needed by tests
+# Configuration automatically optimized based on scenario tags
+# No upfront validation - sections loaded lazily as needed by tests

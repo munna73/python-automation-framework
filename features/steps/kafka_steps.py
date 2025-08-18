@@ -12,8 +12,8 @@ current_file = Path(__file__)
 project_root = current_file.parent.parent.parent
 sys.path.insert(0, str(project_root.absolute()))
 
-from kafka.kafka_producer import kafka_producer
-from kafka.kafka_consumer import kafka_consumer
+from kafka_local.kafka_producer import get_kafka_producer
+from kafka_local.kafka_consumer import get_kafka_consumer
 from utils.logger import logger
 
 # Create Kafka-specific logger
@@ -24,8 +24,8 @@ kafka_logger = logging.getLogger('kafka')
 def step_kafka_connection_configured(context):
     """Verify Kafka connection is configured."""
     kafka_logger.info("Verifying Kafka connection configuration")
-    context.kafka_producer = kafka_producer
-    context.kafka_consumer = kafka_consumer
+    context.kafka_producer = get_kafka_producer()  # Use lazy initialization
+    context.kafka_consumer = get_kafka_consumer()  # Use lazy initialization
     assert context.kafka_producer.connection_params, "Kafka producer connection not configured"
     assert context.kafka_consumer.connection_params, "Kafka consumer connection not configured"
 
