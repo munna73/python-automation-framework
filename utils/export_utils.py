@@ -18,8 +18,9 @@ except ImportError:
     logger.warning("data_cleaner module not found, using basic data processing")
 
 try:
-    from utils.config_loader import ConfigLoader
+    from utils.config_loader import ConfigLoader, config_loader
 except ImportError:
+    ConfigLoader = None
     config_loader = None
     logger.warning("config_loader module not found, using default export settings")
 

@@ -8,15 +8,25 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Union
 from sqlalchemy import text, create_engine
 from db.database_connector import db_connector
-from aws.sqs_connector import sqs_connector
 from utils.logger import logger
 from utils.export_utils import export_utils
+
+# Conditional AWS imports
+try:
+    from aws.sqs_connector import sqs_connector
+    AWS_AVAILABLE = True
+except ImportError:
+    sqs_connector = None
+    AWS_AVAILABLE = False
+    logger.warning("AWS SQS connector not available - boto3 module required")
 
 class AWSSQLIntegration:
     """Integration between AWS SQS and SQL databases for message management."""
     
     def __init__(self):
         """Initialize AWS-SQL integration."""
+        if not AWS_AVAILABLE:
+            logger.warning("AWS functionality not available - some methods will not work")
         # Define the schema for the message table.
         # This dictionary is used to dynamically create tables for different database types.
         self.message_table_schema = {
