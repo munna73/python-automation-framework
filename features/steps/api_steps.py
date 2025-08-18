@@ -224,7 +224,7 @@ def step_send_multiple_requests(context, count, method, endpoint):
     
     logger.info(f"Load test completed: {len(status_codes)} successful, {len(errors)} failed")
 
-@when('I send GraphQL request to "{endpoint}" endpoint')
+@when('I send GraphQL query to "{endpoint}" endpoint')
 def step_send_graphql_request(context, endpoint):
     """Send GraphQL request."""
     query = getattr(context, 'graphql_query', '')

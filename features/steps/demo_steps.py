@@ -1,7 +1,7 @@
 """
 Demo step definitions for HTML report testing
 """
-from behave import given, when, then, but
+from behave import given, when, then
 import time
 from utils.logger import logger
 
@@ -85,7 +85,7 @@ def then_all_steps_complete(context):
     assert context.step_count >= 2, f"Expected at least 2 steps, got {context.step_count}"
 
 
-@but('one step might have warnings')
+@then('one step might have warnings')
 def but_step_warnings(context):
     """Demo step that shows warnings can be logged"""
     logger.warning("This is a demo warning message in the test")

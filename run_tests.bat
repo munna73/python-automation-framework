@@ -22,7 +22,11 @@ if "%~1"=="--features" (
     goto parse_args
 )
 if "%~1"=="--tags" (
-    set "TAGS=--tags %~2"
+    if "%TAGS%"=="" (
+        set "TAGS=--tags %~2"
+    ) else (
+        set "TAGS=%TAGS% --tags %~2"
+    )
     shift
     shift
     goto parse_args
@@ -42,6 +46,17 @@ if "%~1"=="--output" (
 if "%~1"=="--help" goto show_help
 if "%~1"=="-h" goto show_help
 
+REM Handle bare tag arguments (e.g., @sometag)
+if "%~1:~0,1%"=="@" (
+    if "%TAGS%"=="" (
+        set "TAGS=--tags %~1"
+    ) else (
+        set "TAGS=%TAGS% --tags %~1"
+    )
+    shift
+    goto parse_args
+)
+
 echo Unknown option: %~1
 echo Use --help for usage information
 exit /b 1
@@ -51,7 +66,7 @@ echo Usage: %0 [OPTIONS]
 echo.
 echo Options:
 echo   --features DIR    Features directory or specific .feature files
-echo   --tags TAGS       Tags to include/exclude (e.g., "@database")
+echo   --tags TAGS       Tags to include/exclude (e.g., "@database" or "@db,@smoke")
 echo   --title TITLE     Report title
 echo   --output DIR      Output directory for reports
 echo   --help, -h        Show this help message
@@ -60,6 +75,10 @@ echo Examples:
 echo   %0                                    # Run all tests
 echo   %0 --features features\database\     # Run database tests only
 echo   %0 --tags "@database"                # Run tests tagged with @database
+echo   %0 @database                         # Run tests tagged with @database (shorthand)
+echo   %0 @database @smoke                  # Run tests with multiple tags (AND condition)
+echo   %0 --tags "@database,@smoke"         # Multiple tags OR condition (comma-separated)
+echo   %0 --tags "@database" --tags "@smoke" # Multiple tags with AND condition (explicit format)
 echo   %0 --title "My Test Report"          # Custom report title
 exit /b 0
 

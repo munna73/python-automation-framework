@@ -10,7 +10,17 @@ current_file = Path(__file__)
 project_root = current_file.parent.parent.parent
 sys.path.insert(0, str(project_root.absolute()))
 
-from mq.mq_producer import mq_producer
+# Conditional imports to avoid pymqi dependency issues
+try:
+    from mq.mq_producer import mq_producer
+    from mq.mq_consumer import mq_consumer
+    MQ_AVAILABLE = True
+except ImportError as e:
+    print(f"MQ modules not available: {e}")
+    MQ_AVAILABLE = False
+    mq_producer = None
+    mq_consumer = None
+
 from utils.logger import logger, mq_logger
 
 @given('MQ connection is configured')
@@ -91,9 +101,6 @@ def step_verify_success_rate(context, expected_success_rate):
 # ========================================
 # MQ MESSAGE-STYLE STEP DEFINITIONS
 # ========================================
-
-# Import the MQ consumer
-from mq.mq_consumer import mq_consumer
 
 @when('I send file "{filename}" to MQ line by line')
 def step_send_file_to_mq_line_by_line(context, filename):

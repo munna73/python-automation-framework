@@ -4,7 +4,15 @@ from behave import given, when, then
 import time
 import json
 from typing import Dict, List, Any
-from bson import ObjectId
+
+# Conditional imports to avoid bson/pymongo dependency issues
+try:
+    from bson import ObjectId
+    MONGODB_AVAILABLE = True
+except ImportError as e:
+    print(f"MongoDB modules not available: {e}")
+    MONGODB_AVAILABLE = False
+    ObjectId = None
 # Add this to the top of files like base_database_steps.py, mongodb_steps.py, etc.
 import sys
 import os

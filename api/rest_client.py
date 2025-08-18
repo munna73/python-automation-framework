@@ -36,21 +36,13 @@ class RestClient:
         Args:
             config_name (str): The name of the configuration section to load.
         """
-        self.config = config_loader.get_api_config(config_name)
-        self.base_url = self.config.get('base_url', '').rstrip('/')
-        self.default_timeout = self.config.get('timeout', 30)
-        self.verify_ssl = self.config.get('verify_ssl', True)
-        
-        # Consolidate retry configuration to a single source of truth
-        self.retry_config = {
-            'max_retries': self.config.get('max_retries', 3),
-            'retry_delay': self.config.get('retry_delay', 1),
-            # Use status codes from config, with a sensible default
-            'retry_status_codes': self.config.get('retry_status_codes', [500, 502, 503, 504, 429])
-        }
-        
-        # Initialize session with a single, definitive retry strategy
-        self.session = self._create_session()
+        self.config_name = config_name
+        self._config = None  # Lazy loaded
+        self._base_url = None
+        self._default_timeout = None
+        self._verify_ssl = None
+        self._retry_config = None
+        self._session = None  # Lazy loaded
         
         # Default headers
         self.default_headers = {
@@ -64,13 +56,66 @@ class RestClient:
         
         # Authentication
         self.auth_token = None
-        self.auth_type = self.config.get('auth_type', 'bearer')
+        self._auth_type = None  # Lazy loaded
         
         # Request/Response interceptors
         self.request_interceptors = []
         self.response_interceptors = []
-        
-        logger.info(f"REST client initialized with base URL: {self.base_url}")
+    
+    @property
+    def config(self):
+        """Lazy load configuration only when needed."""
+        if self._config is None:
+            self._config = config_loader.get_api_config(self.config_name)
+            logger.info(f"REST client config loaded for: {self.config_name}")
+        return self._config
+    
+    @property
+    def base_url(self):
+        """Lazy load base URL from config."""
+        if self._base_url is None:
+            self._base_url = self.config.get('base_url', '').rstrip('/')
+            logger.info(f"REST client initialized with base URL: {self._base_url}")
+        return self._base_url
+    
+    @property
+    def default_timeout(self):
+        """Lazy load default timeout from config."""
+        if self._default_timeout is None:
+            self._default_timeout = self.config.get('timeout', 30)
+        return self._default_timeout
+    
+    @property
+    def verify_ssl(self):
+        """Lazy load SSL verification setting from config."""
+        if self._verify_ssl is None:
+            self._verify_ssl = self.config.get('verify_ssl', True)
+        return self._verify_ssl
+    
+    @property
+    def retry_config(self):
+        """Lazy load retry configuration from config."""
+        if self._retry_config is None:
+            self._retry_config = {
+                'max_retries': self.config.get('max_retries', 3),
+                'retry_delay': self.config.get('retry_delay', 1),
+                'retry_status_codes': self.config.get('retry_status_codes', [500, 502, 503, 504, 429])
+            }
+        return self._retry_config
+    
+    @property
+    def auth_type(self):
+        """Lazy load auth type from config."""
+        if self._auth_type is None:
+            self._auth_type = self.config.get('auth_type', 'bearer')
+        return self._auth_type
+    
+    @property
+    def session(self):
+        """Lazy load session only when needed."""
+        if self._session is None:
+            self._session = self._create_session()
+        return self._session
     
     def _create_session(self) -> requests.Session:
         """
@@ -95,7 +140,7 @@ class RestClient:
     
     def set_timeout(self, timeout: int):
         """Set request timeout."""
-        self.default_timeout = timeout
+        self._default_timeout = timeout
         logger.debug(f"Set timeout to {timeout} seconds")
     
     def set_headers(self, headers: Dict[str, str]):
@@ -115,8 +160,12 @@ class RestClient:
         but for this implementation, the session is created once.
         A more advanced version would re-create the session here.
         """
-        self.retry_config.update(config)
-        logger.debug(f"Updated retry configuration: {self.retry_config}")
+        if self._retry_config is None:
+            self._retry_config = {}
+        self._retry_config.update(config)
+        # Reset session to use new retry config
+        self._session = None
+        logger.debug(f"Updated retry configuration: {self._retry_config}")
     
     def add_request_interceptor(self, interceptor: callable):
         """Add request interceptor."""
@@ -338,8 +387,9 @@ class RestClient:
     
     def close(self):
         """Close the session."""
-        self.session.close()
-        logger.debug("REST client session closed")
+        if self._session is not None:
+            self._session.close()
+            logger.debug("REST client session closed")
     
     def __enter__(self):
         """Context manager entry."""

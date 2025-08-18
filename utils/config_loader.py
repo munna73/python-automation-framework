@@ -142,6 +142,16 @@ class ConfigLoader:
         'P101': ['P101_*'],
         'P102': ['P102_*'],
         'P103': ['P103_*'],
+        # Common custom/test tags - minimal configuration
+        'my_test': ['DEFAULT', 'QUERIES'],
+        'custom': ['DEFAULT', 'QUERIES'],
+        'test': ['DEFAULT', 'QUERIES'],
+        'smoke': ['DEFAULT', 'QUERIES'],
+        'regression': ['DEFAULT', 'QUERIES'],
+        'integration': ['DEFAULT', 'QUERIES'],
+        'unit': ['DEFAULT'],
+        'performance': ['DEFAULT', 'QUERIES'],
+        'security': ['DEFAULT'],
     }
     
     def __init__(self, config_dir: Optional[str] = None, cache_timeout: int = 300):
@@ -291,14 +301,26 @@ class ConfigLoader:
         required_sections.add('DEFAULT')
         
         # Map tags to sections
+        matched_tags = []
         for tag in self._active_tags:
             if tag in self.TAG_TO_SECTIONS:
                 required_sections.update(self.TAG_TO_SECTIONS[tag])
+                matched_tags.append(tag)
         
-        # If no specific tags found, load everything (fallback)
-        if len(required_sections) == 1:  # Only DEFAULT
-            self.logger.warning(f"No matching sections found for tags {self._active_tags}, loading all sections")
-            self._lazy_loading_enabled = False
+        # Handle unknown/custom tags more intelligently
+        if len(required_sections) == 1:  # Only DEFAULT section matched
+            unmatched_tags = [tag for tag in self._active_tags if tag not in matched_tags]
+            
+            if unmatched_tags:
+                self.logger.info(f"Custom/unknown tags detected: {unmatched_tags}")
+                self.logger.info("Using minimal configuration loading for custom tags")
+                # For unknown tags, only load DEFAULT and QUERIES (minimal safe set)
+                required_sections.add('QUERIES')
+                # Keep lazy loading enabled but with minimal sections
+            else:
+                # No tags at all - fall back to loading everything
+                self.logger.warning("No tags found, disabling lazy loading")
+                self._lazy_loading_enabled = False
         
         return required_sections
     
@@ -373,13 +395,26 @@ class ConfigLoader:
         """
         cache_key = f"file_{filename}"
         
+        # Debug logging to track what's calling config loading
+        import traceback
+        self.logger.debug(f"_load_config_with_lazy_loading called for {filename}")
+        self.logger.debug(f"Current active tags: {self._active_tags}")
+        self.logger.debug("Call stack:")
+        for line in traceback.format_stack()[-3:]:
+            self.logger.debug(f"  {line.strip()}")
+        
         # Auto-detect tags if not already set
         if not self._active_tags and self._lazy_loading_enabled:
             detected_tags = self._auto_detect_active_tags()
             if detected_tags:
                 self.set_active_tags(detected_tags)
             else:
-                self._lazy_loading_enabled = False
+                # No tags detected - this might be during import/initialization
+                # Use conservative approach: only load DEFAULT and minimal sections
+                self.logger.info("No tags detected, using conservative configuration loading")
+                self._active_tags = ['unit']  # Use minimal 'unit' tag for basic config
+                self._required_sections = {'DEFAULT'}
+                # Keep lazy loading enabled with minimal sections
         
         with self._cache_lock:
             # Load full config first

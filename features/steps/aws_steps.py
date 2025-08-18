@@ -2,10 +2,25 @@
 AWS-related step definitions for Behave BDD testing.
 """
 from behave import given, when, then
-from aws.sqs_connector import sqs_connector
-from aws.s3_connector import s3_connector
-from aws.sql_integration import aws_sql_integration
 from utils.logger import logger
+
+# Conditional imports to avoid boto3 dependency issues
+try:
+    from aws.sqs_connector import SqsConnector  # Import the class
+    from aws.s3_connector import S3Connector  # Import the class
+    from aws.sql_integration import aws_sql_integration
+    AWS_AVAILABLE = True
+    # Create factory functions for backward compatibility
+    sqs_connector = lambda profile_name=None: SqsConnector(profile_name=profile_name)
+    s3_connector = lambda profile_name=None: S3Connector(profile_name=profile_name)
+except ImportError as e:
+    logger.warning(f"AWS modules not available: {e}")
+    AWS_AVAILABLE = False
+    sqs_connector = None
+    s3_connector = None
+    SqsConnector = None
+    S3Connector = None
+    aws_sql_integration = None
 import json
 import time
 import uuid
@@ -19,17 +34,24 @@ current_file = Path(__file__)
 project_root = current_file.parent.parent.parent
 sys.path.insert(0, str(project_root.absolute()))
 
+def require_aws():
+    """Helper function to check if AWS modules are available."""
+    if not AWS_AVAILABLE:
+        raise ImportError("AWS functionality not available - boto3 module required")
+
 # SQS Step Definitions
 @given('AWS SQS connection is configured')
 def step_sqs_connection_configured(context):
     """Verify AWS SQS connection is configured."""
+    require_aws()
     logger.info("Verifying AWS SQS connection configuration")
-    context.sqs_connector = sqs_connector
+    context.sqs_connector = sqs_connector()  # Call the lambda to create instance
     assert context.sqs_connector.sqs_client is not None, "SQS client not configured"
 
 @given('AWS credentials are loaded from profile "{profile_name}"')
 def step_load_aws_profile(context, profile_name):
     """Load AWS credentials from specific profile."""
+    require_aws()
     logger.info(f"Loading AWS credentials from profile: {profile_name}")
     context.aws_profile = profile_name
     # Reinitialize connectors with profile
@@ -302,8 +324,9 @@ def step_verify_processing_time(context, expected_time):
 @given('AWS S3 connection is configured')
 def step_s3_connection_configured(context):
     """Verify AWS S3 connection is configured."""
+    require_aws()
     logger.info("Verifying AWS S3 connection configuration")
-    context.s3_connector = s3_connector
+    context.s3_connector = s3_connector()  # Call the lambda to create instance
     assert context.s3_connector.s3_client is not None, "S3 client not configured"
 
 @given('S3 bucket is set to "{bucket_name}"')

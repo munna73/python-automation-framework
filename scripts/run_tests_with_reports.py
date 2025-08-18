@@ -43,15 +43,18 @@ def run_tests_with_reports(
     json_output = f"{output_dir}/behave_results_{timestamp}.json"
     html_output = f"{output_dir}/test_report_{timestamp}.html"
     
+    # Determine the correct Python executable
+    python_executable = "python3" if sys.platform.startswith("darwin") or sys.platform.startswith("linux") else "python"
+    
     behave_cmd = [
-        "behave",
-        "--format=pretty",  # Console output
-        "--format=json",    # JSON for HTML report generation
-        f"--outfile={json_output}",  # JSON output file
-        "--format=junit",   # JUnit XML
+        python_executable, "-m", "behave",  # Use python -m behave for better compatibility
+        "--format=json",           # JSON format (must be LAST to go to outfile)
+        f"--outfile={json_output}",# JSON output file (override behave.ini)
+        "--junit",                 # JUnit XML output
         "--junit-directory=output/junit",
-        "--no-capture",     # Don't capture stdout/stderr
-        "--no-capture-stderr"
+        "--no-capture",            # Don't capture stdout/stderr
+        "--no-capture-stderr",
+        "--no-logcapture"          # Prevent log capture interfering with JSON
     ]
     
     # Add feature paths
