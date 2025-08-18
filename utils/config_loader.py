@@ -123,10 +123,10 @@ class ConfigLoader:
         'postgres': ['*_POSTGRES', 'comparison_settings', 'QUERIES'], 
         'mongodb': ['*_MONGODB'],
         'kafka': ['*_KAFKA'],
+        'mq': ['*_MQ', '*_MQ_FIFO'],
         'aws': ['*_SQS', '*_S3'],
         'sqs': ['*_SQS'],
         's3': ['*_S3'],
-        'mq': ['*_MQ', '*_MQ_FIFO'],
         'database': ['*_ORACLE', '*_POSTGRES', 'comparison_settings', 'QUERIES'],
         'comparison': ['comparison_settings'],
         'api': ['API', '*_API'],
@@ -795,6 +795,77 @@ class ConfigLoader:
         except Exception as e:
             raise ConfigurationError(f"Invalid API configuration in section '{section_name}': {str(e)}",
                                    config_key=section_name)
+    
+    def get_mq_config(self, section_name: str = "S101_MQ") -> Dict[str, Any]:
+        """
+        Load MQ configuration from a specific section.
+        
+        Args:
+            section_name: Section name in config file (default: "S101_MQ")
+            
+        Returns:
+            Dictionary containing MQ configuration
+            
+        Raises:
+            ConfigurationError: If section not found or configuration invalid
+        """
+        try:
+            self.logger.debug(f"Loading MQ configuration from section: {section_name}")
+            
+            # Load configuration file
+            config = self.load_config_file('config.ini')
+            
+            if section_name not in config:
+                # Try to find any MQ section
+                mq_sections = [s for s in config.keys() if 'MQ' in s.upper()]
+                if mq_sections:
+                    section_name = mq_sections[0]
+                    self.logger.info(f"Using MQ section: {section_name}")
+                else:
+                    # Return default MQ configuration
+                    self.logger.warning(f"MQ configuration section '{section_name}' not found, using defaults")
+                    return {
+                        'queue_manager': 'QM1',
+                        'channel': 'DEV.APP.SVRCONN',
+                        'host': 'localhost',
+                        'port': 1414,
+                        'username': '',
+                        'password': '',
+                        'queue_name': 'DEV.QUEUE.1'
+                    }
+            
+            mq_section = config[section_name]
+            
+            # Build MQ configuration with environment variable resolution
+            mq_config = {}
+            for key, value in mq_section.items():
+                resolved_value = self._resolve_environment_variables(value)
+                
+                # Convert specific values to appropriate types
+                if key in ['port']:
+                    try:
+                        mq_config[key] = int(resolved_value)
+                    except (ValueError, TypeError):
+                        mq_config[key] = 1414  # Default MQ port
+                else:
+                    mq_config[key] = resolved_value
+            
+            self.logger.info(f"MQ configuration loaded successfully from {section_name}")
+            return mq_config
+            
+        except Exception as e:
+            self.logger.error(f"Failed to load MQ configuration: {e}")
+            # Return default configuration on error
+            self.logger.warning("Using default MQ configuration due to error")
+            return {
+                'queue_manager': 'QM1',
+                'channel': 'DEV.APP.SVRCONN',
+                'host': 'localhost',
+                'port': 1414,
+                'username': '',
+                'password': '',
+                'queue_name': 'DEV.QUEUE.1'
+            }
     
     def get_custom_config(self, section: str, key: Optional[str] = None, default: Any = None) -> Any:
         """
