@@ -22,7 +22,7 @@ import hashlib
 import warnings
 
 # Import your existing config loader
-from utils.config_loader import ConfigLoader
+from utils.config_loader import ConfigLoader, config_loader
 from utils.custom_exceptions import ConfigurationError
 # Import on-demand configuration helpers
 from utils.config_helper import get_config_helper, load_db_config_when_needed, load_config_value_when_needed

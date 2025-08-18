@@ -5,7 +5,7 @@ import pymqi
 import os
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from utils.config_loader import ConfigLoader
+from utils.config_loader import ConfigLoader, config_loader
 from utils.logger import logger, mq_logger
 
 class MQProducer:
