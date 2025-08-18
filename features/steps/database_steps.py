@@ -1274,10 +1274,9 @@ def load_configuration_from_file(context, config_file):
             context.config_loader = global_config_loader
             logger.info(f"✅ Configuration loader initialized for: {config_file}")
         
-        # Initialize config helper for this context
-        # The config helper will use the existing config_loader
-        config_helper = get_config_helper(context)
-        logger.info(f"✅ On-demand configuration helper ready")
+        # Skip config helper initialization to avoid circular references
+        # The config_loader is sufficient for database operations
+        logger.info(f"✅ Configuration ready for use")
         
         # Verify the config file exists
         config_path = Path("config") / config_file
