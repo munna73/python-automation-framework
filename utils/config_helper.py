@@ -344,9 +344,58 @@ def load_db_config_when_needed(context, section_name: str, env_vars: Optional[Di
     
     try:
         logger.info(f"Loading database configuration for {section_name}")
-        db_config = config_loader_instance.get_database_config(section_name)
-        logger.info(f"✅ Database config loaded: {section_name} -> {db_config.host}:{db_config.port}")
-        return db_config
+        
+        # Try using the standard method first
+        try:
+            db_config = config_loader_instance.get_database_config(section_name)
+            logger.info(f"✅ Database config loaded: {section_name} -> {db_config.host}:{db_config.port}")
+            return db_config
+        except ConfigurationError as config_error:
+            # If it fails due to missing sections or env vars, try direct section loading
+            if "not found" in str(config_error).lower() or "environment variable" in str(config_error).lower():
+                logger.warning(f"Standard config loading failed, trying direct section access: {config_error}")
+                
+                # Load specific section directly without full validation
+                import configparser
+                from pathlib import Path
+                from utils.config_loader import DatabaseConfig
+                
+                config_path = Path('config/config.ini')
+                if not config_path.exists():
+                    raise ConfigurationError(f"Configuration file not found: {config_path}")
+                
+                parser = configparser.ConfigParser()
+                parser.read(config_path)
+                
+                if section_name not in parser:
+                    available = [s for s in parser.sections() if '_ORACLE' in s or '_POSTGRES' in s]
+                    raise ConfigurationError(f"Section '{section_name}' not found. Available database sections: {available}")
+                
+                section_data = parser[section_name]
+                
+                # Create DatabaseConfig with environment variable resolution for this section only
+                password_key = section_data.get('password', '')
+                resolved_password = password_key
+                if password_key and password_key.isupper() and '_' in password_key:
+                    # Try to resolve environment variable
+                    import os
+                    resolved_password = os.getenv(password_key, password_key)
+                    if resolved_password == password_key:
+                        logger.warning(f"Environment variable '{password_key}' not set, using literal value")
+                
+                db_config = DatabaseConfig(
+                    host=section_data.get('host', ''),
+                    port=int(section_data.get('port', 5432)),
+                    database=section_data.get('database', section_data.get('service_name', '')),
+                    username=section_data.get('username', ''),
+                    password=resolved_password
+                )
+                
+                logger.info(f"✅ Database config loaded directly: {section_name} -> {db_config.host}:{db_config.port}")
+                return db_config
+            else:
+                raise
+                
     except Exception as e:
         logger.error(f"❌ Failed to load database config for {section_name}: {e}")
         raise ConfigurationError(f"Failed to load database configuration for '{section_name}': {str(e)}")
