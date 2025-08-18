@@ -15,7 +15,7 @@ import urllib3
 import mimetypes
 
 # Assuming these are available in your project structure
-from utils.config_loader import ConfigLoader
+from utils.config_loader import ConfigLoader, config_loader
 from utils.logger import logger
 
 # Disable SSL warnings for test environments
@@ -29,7 +29,7 @@ class RestClient:
     built-in features for retry logic, authentication, and logging.
     """
     
-    def __init__(self, config_name: str = 'api'):
+    def __init__(self, config_name: str = 'API'):
         """
         Initialize REST client with configuration from a file.
         
@@ -84,7 +84,7 @@ class RestClient:
             total=self.retry_config['max_retries'],
             backoff_factor=self.retry_config['retry_delay'],
             status_forcelist=self.retry_config['retry_status_codes'],
-            method_whitelist=["HEAD", "GET", "PUT", "DELETE", "OPTIONS", "TRACE", "POST", "PATCH"]
+            allowed_methods=["HEAD", "GET", "PUT", "DELETE", "OPTIONS", "TRACE", "POST", "PATCH"]
         )
         
         adapter = HTTPAdapter(max_retries=retry_strategy)

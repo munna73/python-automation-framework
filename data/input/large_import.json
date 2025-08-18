@@ -1,0 +1,25 @@
+{
+  "import_type": "customers",
+  "data": [
+    {
+      "name": "Customer 1",
+      "email": "customer1@example.com",
+      "status": "active"
+    },
+    {
+      "name": "Customer 2", 
+      "email": "customer2@example.com",
+      "status": "active"
+    },
+    {
+      "name": "Customer 3",
+      "email": "customer3@example.com", 
+      "status": "inactive"
+    }
+  ],
+  "options": {
+    "update_existing": true,
+    "validate_email": true,
+    "send_welcome_email": false
+  }
+}

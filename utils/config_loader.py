@@ -177,7 +177,8 @@ class ConfigLoader:
         """Validate configuration value according to rules."""
         key_lower = key.lower()
         for rule_key, rule_func in self.VALIDATION_RULES.items():
-            if rule_key in key_lower:
+            # More precise matching to avoid false positives
+            if key_lower == rule_key or key_lower.endswith('_' + rule_key):
                 try:
                     if not rule_func(value):
                         raise ConfigurationError(f"Validation failed for {context}: {key}={value}")
@@ -375,6 +376,109 @@ class ConfigLoader:
             )
         except (KeyError, ValueError) as e:
             raise ConfigurationError(f"Invalid comparison configuration in section '{section_name}': {str(e)}",
+                                   config_key=section_name)
+    
+    def get_kafka_config(self, section_name: str = "S101_KAFKA") -> Dict[str, Any]:
+        """
+        Get Kafka configuration from specified section.
+        
+        Args:
+            section_name: Kafka section name in config file (default: "S101_KAFKA")
+        
+        Returns:
+            Dictionary with Kafka configuration
+        """
+        config = self.load_config_file("config.ini")
+        
+        if section_name not in config:
+            available_sections = [s for s in config.keys() if 'KAFKA' in s]
+            raise ConfigurationError(
+                f"Kafka configuration section '{section_name}' not found. "
+                f"Available Kafka sections: {available_sections}",
+                config_key=section_name
+            )
+        
+        kafka_config = config[section_name]
+        
+        try:
+            # Return the kafka configuration as-is, with type conversions for numeric values
+            return {
+                'bootstrap_servers': kafka_config.get('bootstrap_servers', 'localhost:9092'),
+                'client_id': kafka_config.get('client_id', 'test-automation'),
+                'group_id': kafka_config.get('group_id', 'test-group'),
+                'value_serializer': kafka_config.get('value_serializer', 'string'),
+                'key_serializer': kafka_config.get('key_serializer', 'string'),
+                'value_deserializer': kafka_config.get('value_deserializer', 'string'),
+                'key_deserializer': kafka_config.get('key_deserializer', 'string'),
+                'auto_offset_reset': kafka_config.get('auto_offset_reset', 'latest'),
+                'enable_auto_commit': kafka_config.get('enable_auto_commit', 'true'),
+                'auto_commit_interval_ms': kafka_config.get('auto_commit_interval_ms', '5000'),
+                'session_timeout_ms': kafka_config.get('session_timeout_ms', '30000'),
+                'heartbeat_interval_ms': kafka_config.get('heartbeat_interval_ms', '3000'),
+                'max_poll_records': kafka_config.get('max_poll_records', '500'),
+                'fetch_min_bytes': kafka_config.get('fetch_min_bytes', '1'),
+                'fetch_max_wait_ms': kafka_config.get('fetch_max_wait_ms', '500'),
+                'consumer_timeout_ms': kafka_config.get('consumer_timeout_ms', '1000'),
+                'compression_type': kafka_config.get('compression_type', 'none'),
+                'acks': kafka_config.get('acks', 'all'),
+                'retries': kafka_config.get('retries', '3'),
+                'batch_size': kafka_config.get('batch_size', '16384'),
+                'linger_ms': kafka_config.get('linger_ms', '10'),
+                'buffer_memory': kafka_config.get('buffer_memory', '33554432'),
+                'max_block_ms': kafka_config.get('max_block_ms', '60000'),
+                'request_timeout_ms': kafka_config.get('request_timeout_ms', '30000'),
+                'security_protocol': kafka_config.get('security_protocol'),
+                'sasl_mechanism': kafka_config.get('sasl_mechanism'),
+                'sasl_username': kafka_config.get('sasl_username'),
+                'sasl_password': kafka_config.get('sasl_password'),
+                'ssl_cafile': kafka_config.get('ssl_cafile'),
+                'ssl_certfile': kafka_config.get('ssl_certfile'),
+                'ssl_keyfile': kafka_config.get('ssl_keyfile'),
+                'test_topic': kafka_config.get('test_topic', 'connection-test')
+            }
+            
+        except Exception as e:
+            raise ConfigurationError(f"Invalid Kafka configuration in section '{section_name}': {str(e)}",
+                                   config_key=section_name)
+    
+    def get_api_config(self, section_name: str = "API") -> Dict[str, Any]:
+        """
+        Get API configuration from specified section.
+        
+        Args:
+            section_name: API section name in config file (default: "API")
+        
+        Returns:
+            Dictionary with API configuration
+        """
+        config = self.load_config_file("config.ini")
+        
+        if section_name not in config:
+            available_sections = [s for s in config.keys() if 'API' in s.upper()]
+            raise ConfigurationError(
+                f"API configuration section '{section_name}' not found. "
+                f"Available API sections: {available_sections}",
+                config_key=section_name
+            )
+        
+        api_config = config[section_name]
+        
+        try:
+            # Return the API configuration with defaults
+            return {
+                'base_url': api_config.get('base_url', ''),
+                'timeout': int(api_config.get('timeout', 30)),
+                'verify_ssl': api_config.get('verify_ssl', 'true').lower() == 'true',
+                'token': api_config.get('token'),
+                'auth_type': api_config.get('auth_type', 'bearer'),
+                'max_retries': int(api_config.get('max_retries', 3)),
+                'retry_delay': int(api_config.get('retry_delay', 1)),
+                'retry_status_codes': [int(code.strip()) for code in api_config.get('retry_status_codes', '500,502,503,504,429').split(',')],
+                'headers': json.loads(api_config.get('headers', '{}')) if api_config.get('headers') else {}
+            }
+            
+        except Exception as e:
+            raise ConfigurationError(f"Invalid API configuration in section '{section_name}': {str(e)}",
                                    config_key=section_name)
     
     def get_custom_config(self, section: str, key: Optional[str] = None, default: Any = None) -> Any:
@@ -578,6 +682,9 @@ if __name__ == "__main__":
     except ConfigurationError as e:
         print(f"Configuration error: {e}")
 
+
+# Create global instance
+config_loader = ConfigLoader()
 
 #         @given('I connect to Oracle database using "{db_section}" configuration')
 # def connect_to_oracle(context, db_section):

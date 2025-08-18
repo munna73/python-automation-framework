@@ -352,5 +352,182 @@ class MQProducer:
         """Context manager exit."""
         self.disconnect()
 
+    # ========================================
+    # MESSAGE-STYLE OPERATIONS FOR MQ
+    # ========================================
+    
+    def send_file_as_mq_messages(self, filename: str, line_by_line: bool = True, 
+                                message_prefix: str = None) -> Dict[str, Any]:
+        """
+        Send file content to MQ as messages with different modes.
+        
+        Args:
+            filename: Local file path to read
+            line_by_line: If True, each line becomes a separate MQ message
+                         If False, entire file becomes single MQ message
+            message_prefix: Optional prefix for message identification
+            
+        Returns:
+            Dictionary with send results and statistics
+        """
+        try:
+            file_path_obj = Path(filename)
+            
+            if not file_path_obj.exists():
+                # Try looking in data directory
+                file_path_obj = Path(__file__).parent.parent / "data" / "input" / filename
+            
+            if not file_path_obj.exists():
+                raise FileNotFoundError(f"File not found: {filename}")
+            
+            mq_logger.info(f"Sending file to MQ {'line by line' if line_by_line else 'as whole file'}: {file_path_obj.name}")
+            
+            if line_by_line:
+                # Use existing line-by-line functionality
+                return self.post_file_line_by_line(str(file_path_obj))
+            else:
+                # Use existing whole file functionality
+                success = self.post_file_as_single_message(str(file_path_obj))
+                
+                # Calculate file stats for consistent return format
+                with open(file_path_obj, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    total_lines = len(content.splitlines()) if content else 0
+                
+                return {
+                    'success': success,
+                    'total_lines': total_lines,
+                    'success_count': 1 if success else 0,
+                    'error_count': 0 if success else 1,
+                    'success_rate': 100 if success else 0,
+                    'errors': [] if success else ['Failed to send file as single message']
+                }
+                
+        except Exception as e:
+            mq_logger.error(f"Error sending file as MQ messages: {e}")
+            return {
+                'success': False,
+                'total_lines': 0,
+                'success_count': 0,
+                'error_count': 1,
+                'success_rate': 0,
+                'errors': [str(e)]
+            }
+    
+    def post_messages_from_list(self, messages: List[str], 
+                              add_line_numbers: bool = False) -> Dict[str, Any]:
+        """
+        Post multiple messages from a list.
+        
+        Args:
+            messages: List of message strings to post
+            add_line_numbers: If True, add line numbers to messages
+            
+        Returns:
+            Dictionary with posting results
+        """
+        try:
+            mq_logger.info(f"Posting {len(messages)} messages from list")
+            
+            success_count = 0
+            error_count = 0
+            errors = []
+            
+            for i, message in enumerate(messages, 1):
+                try:
+                    # Add line number if requested
+                    if add_line_numbers:
+                        formatted_message = f"[{i:06d}] {message}"
+                    else:
+                        formatted_message = message
+                    
+                    if self.post_message(formatted_message):
+                        success_count += 1
+                    else:
+                        error_count += 1
+                        errors.append(f"Message {i}: Failed to post")
+                        
+                except Exception as e:
+                    error_count += 1
+                    errors.append(f"Message {i}: {str(e)}")
+            
+            results = {
+                'success': error_count == 0,
+                'total_messages': len(messages),
+                'success_count': success_count,
+                'error_count': error_count,
+                'success_rate': (success_count / len(messages) * 100) if messages else 0,
+                'errors': errors
+            }
+            
+            mq_logger.info(f"Message list posting completed: {success_count}/{len(messages)} posted successfully")
+            return results
+            
+        except Exception as e:
+            mq_logger.error(f"Error posting messages from list: {e}")
+            return {
+                'success': False,
+                'total_messages': len(messages) if messages else 0,
+                'success_count': 0,
+                'error_count': len(messages) if messages else 1,
+                'success_rate': 0,
+                'errors': [str(e)]
+            }
+    
+    def post_structured_messages(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Post structured messages with custom message descriptors.
+        
+        Args:
+            messages: List of dictionaries with 'content' and optional 'descriptor' keys
+            
+        Returns:
+            Dictionary with posting results
+        """
+        try:
+            mq_logger.info(f"Posting {len(messages)} structured messages")
+            
+            success_count = 0
+            error_count = 0
+            errors = []
+            
+            for i, msg_data in enumerate(messages, 1):
+                try:
+                    content = msg_data.get('content', '')
+                    descriptor = msg_data.get('descriptor', None)
+                    
+                    if self.post_message(content, descriptor):
+                        success_count += 1
+                    else:
+                        error_count += 1
+                        errors.append(f"Structured message {i}: Failed to post")
+                        
+                except Exception as e:
+                    error_count += 1
+                    errors.append(f"Structured message {i}: {str(e)}")
+            
+            results = {
+                'success': error_count == 0,
+                'total_messages': len(messages),
+                'success_count': success_count,
+                'error_count': error_count,
+                'success_rate': (success_count / len(messages) * 100) if messages else 0,
+                'errors': errors
+            }
+            
+            mq_logger.info(f"Structured message posting completed: {success_count}/{len(messages)} posted successfully")
+            return results
+            
+        except Exception as e:
+            mq_logger.error(f"Error posting structured messages: {e}")
+            return {
+                'success': False,
+                'total_messages': len(messages) if messages else 0,
+                'success_count': 0,
+                'error_count': len(messages) if messages else 1,
+                'success_rate': 0,
+                'errors': [str(e)]
+            }
+
 # Global MQ producer instance
 mq_producer = MQProducer()

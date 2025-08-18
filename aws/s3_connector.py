@@ -931,3 +931,292 @@ class S3Connector:
         except Exception as e:
             logger.error(f"Unexpected error getting object metadata: {e}")
             raise
+
+    # ========================================
+    # MESSAGE-STYLE OPERATIONS FOR S3
+    # ========================================
+    
+    def get_object_content(self, bucket_name: str, s3_key: str) -> Optional[str]:
+        """
+        Get the content of an S3 object as a string.
+        
+        Args:
+            bucket_name: S3 bucket name
+            s3_key: S3 object key
+            
+        Returns:
+            Object content as string, or None if object not found
+        """
+        try:
+            response = self.s3_client.get_object(Bucket=bucket_name, Key=s3_key)
+            content = response['Body'].read().decode('utf-8')
+            
+            logger.debug(f"Retrieved content from s3://{bucket_name}/{s3_key} ({len(content)} characters)")
+            return content
+            
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            if error_code == 'NoSuchKey':
+                logger.warning(f"Object not found: s3://{bucket_name}/{s3_key}")
+                return None
+            else:
+                logger.error(f"Failed to get object content: {e}")
+                raise
+        except Exception as e:
+            logger.error(f"Unexpected error getting object content: {e}")
+            raise
+    
+    def put_object_content(self, bucket_name: str, s3_key: str, content: str, 
+                          content_type: str = 'text/plain') -> bool:
+        """
+        Put content directly to S3 as an object.
+        
+        Args:
+            bucket_name: S3 bucket name
+            s3_key: S3 object key
+            content: Content to upload as string
+            content_type: Content type (default: text/plain)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            self.s3_client.put_object(
+                Bucket=bucket_name,
+                Key=s3_key,
+                Body=content.encode('utf-8'),
+                ContentType=content_type
+            )
+            
+            logger.info(f"Put content to s3://{bucket_name}/{s3_key} ({len(content)} characters)")
+            return True
+            
+        except ClientError as e:
+            logger.error(f"Failed to put object content: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error putting object content: {e}")
+            return False
+    
+    def download_objects_as_messages(self, bucket_name: str, prefix: str, 
+                                   output_file: str, one_message_per_line: bool = True,
+                                   max_objects: int = None) -> Dict[str, Any]:
+        """
+        Download S3 objects and write their content as messages to a file.
+        
+        Args:
+            bucket_name: S3 bucket name
+            prefix: S3 prefix to filter objects
+            output_file: Local file path to write messages
+            one_message_per_line: If True, each object content = one line in file
+                                If False, concatenate all object content as single file
+            max_objects: Maximum number of objects to process (None for all)
+            
+        Returns:
+            Dictionary with download results and statistics
+        """
+        try:
+            # List objects with the given prefix
+            objects = self.list_objects(bucket_name, prefix)
+            
+            if max_objects:
+                objects = objects[:max_objects]
+            
+            logger.info(f"Processing {len(objects)} objects from s3://{bucket_name}/{prefix}")
+            
+            messages_written = 0
+            total_size = 0
+            failed_objects = []
+            
+            with open(output_file, 'w', encoding='utf-8') as f:
+                for i, obj in enumerate(objects):
+                    try:
+                        s3_key = obj['key']
+                        content = self.get_object_content(bucket_name, s3_key)
+                        
+                        if content is not None:
+                            if one_message_per_line:
+                                # Write each object content as a separate line
+                                # Strip any existing newlines and add single newline
+                                clean_content = content.strip().replace('\n', ' ').replace('\r', ' ')
+                                f.write(clean_content + '\n')
+                            else:
+                                # Concatenate all content (preserve original formatting)
+                                f.write(content)
+                                if not content.endswith('\n'):
+                                    f.write('\n')
+                            
+                            messages_written += 1
+                            total_size += len(content)
+                            
+                            logger.debug(f"Processed object {i+1}/{len(objects)}: {s3_key}")
+                        else:
+                            failed_objects.append(s3_key)
+                            
+                    except Exception as e:
+                        logger.error(f"Failed to process object {obj['key']}: {e}")
+                        failed_objects.append(obj['key'])
+            
+            results = {
+                'success': True,
+                'messages_written': messages_written,
+                'total_objects': len(objects),
+                'output_file': output_file,
+                'total_content_size': total_size,
+                'failed_objects': failed_objects,
+                'success_rate': (messages_written / len(objects) * 100) if objects else 100
+            }
+            
+            logger.info(f"Downloaded {messages_written}/{len(objects)} objects as messages to {output_file}")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Failed to download S3 objects as messages: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'messages_written': 0,
+                'total_objects': 0
+            }
+    
+    def upload_file_as_s3_messages(self, filename: str, bucket_name: str, 
+                                  prefix: str, line_by_line: bool = True,
+                                  message_prefix: str = 'message') -> Dict[str, Any]:
+        """
+        Read a file and upload its content to S3 as separate objects or single object.
+        
+        Args:
+            filename: Local file path to read
+            bucket_name: S3 bucket name
+            prefix: S3 prefix for uploaded objects
+            line_by_line: If True, each line becomes a separate S3 object
+                         If False, entire file becomes single S3 object
+            message_prefix: Prefix for S3 object keys (used with line numbers)
+            
+        Returns:
+            Dictionary with upload results and statistics
+        """
+        try:
+            if not os.path.exists(filename):
+                raise FileNotFoundError(f"File not found: {filename}")
+            
+            uploaded_objects = []
+            failed_uploads = []
+            total_lines = 0
+            
+            with open(filename, 'r', encoding='utf-8') as f:
+                if line_by_line:
+                    # Upload each line as a separate S3 object
+                    for line_num, line in enumerate(f, 1):
+                        if line.strip():  # Skip empty lines
+                            total_lines += 1
+                            s3_key = f"{prefix}/{message_prefix}_{line_num:06d}.txt"
+                            
+                            if self.put_object_content(bucket_name, s3_key, line.strip()):
+                                uploaded_objects.append({
+                                    'line_number': line_num,
+                                    's3_key': s3_key,
+                                    'content_length': len(line.strip())
+                                })
+                                logger.debug(f"Uploaded line {line_num} to s3://{bucket_name}/{s3_key}")
+                            else:
+                                failed_uploads.append({
+                                    'line_number': line_num,
+                                    's3_key': s3_key,
+                                    'error': 'Upload failed'
+                                })
+                else:
+                    # Upload entire file content as single S3 object
+                    f.seek(0)  # Reset file pointer
+                    content = f.read()
+                    total_lines = len(content.splitlines()) if content else 0
+                    
+                    s3_key = f"{prefix}/{os.path.basename(filename)}"
+                    
+                    if self.put_object_content(bucket_name, s3_key, content):
+                        uploaded_objects.append({
+                            'line_number': 'all',
+                            's3_key': s3_key,
+                            'content_length': len(content)
+                        })
+                        logger.info(f"Uploaded entire file to s3://{bucket_name}/{s3_key}")
+                    else:
+                        failed_uploads.append({
+                            'line_number': 'all',
+                            's3_key': s3_key,
+                            'error': 'Upload failed'
+                        })
+            
+            results = {
+                'success': len(failed_uploads) == 0,
+                'total_lines': total_lines,
+                'uploaded_count': len(uploaded_objects),
+                'failed_count': len(failed_uploads),
+                'uploaded_objects': uploaded_objects,
+                'failed_uploads': failed_uploads,
+                'success_rate': (len(uploaded_objects) / max(total_lines, 1) * 100) if line_by_line else (100 if uploaded_objects else 0)
+            }
+            
+            logger.info(f"Upload completed: {len(uploaded_objects)}/{total_lines} {'lines' if line_by_line else 'files'} uploaded successfully")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Failed to upload file as S3 messages: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'total_lines': 0,
+                'uploaded_count': 0,
+                'failed_count': 1
+            }
+    
+    def retrieve_s3_messages_to_file(self, bucket_name: str, prefix: str,
+                                   output_file: str, retrieve_mode: str = 'line_by_line',
+                                   max_messages: int = None) -> Dict[str, Any]:
+        """
+        Retrieve S3 objects as messages and write to file with different modes.
+        
+        Args:
+            bucket_name: S3 bucket name
+            prefix: S3 prefix to filter objects
+            output_file: Local file path to write messages
+            retrieve_mode: 'line_by_line' (each object = 1 line) or 
+                          'whole_file' (concatenate all objects)
+            max_messages: Maximum number of messages to retrieve
+            
+        Returns:
+            Dictionary with retrieval results
+        """
+        one_message_per_line = (retrieve_mode == 'line_by_line')
+        
+        return self.download_objects_as_messages(
+            bucket_name=bucket_name,
+            prefix=prefix,
+            output_file=output_file,
+            one_message_per_line=one_message_per_line,
+            max_objects=max_messages
+        )
+    
+    def send_file_to_s3_messages(self, filename: str, bucket_name: str,
+                               prefix: str, send_mode: str = 'line_by_line') -> Dict[str, Any]:
+        """
+        Send file content to S3 as messages with different modes.
+        
+        Args:
+            filename: Local file path to read
+            bucket_name: S3 bucket name
+            prefix: S3 prefix for uploaded objects
+            send_mode: 'line_by_line' (each line = separate object) or 
+                      'whole_file' (entire file = single object)
+        
+        Returns:
+            Dictionary with upload results
+        """
+        line_by_line = (send_mode == 'line_by_line')
+        
+        return self.upload_file_as_s3_messages(
+            filename=filename,
+            bucket_name=bucket_name,
+            prefix=prefix,
+            line_by_line=line_by_line
+        )

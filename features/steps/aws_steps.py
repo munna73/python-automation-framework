@@ -619,3 +619,272 @@ def step_purge_sqs_queue(context):
         logger.info("Queue purged successfully")
     except Exception as e:
         logger.warning(f"Failed to purge queue: {str(e)}")
+
+
+# ========================================
+# S3 MESSAGE-STYLE STEP DEFINITIONS
+# ========================================
+
+@when('I retrieve S3 objects from prefix "{prefix}" and write to file "{output_file}" line by line')
+def step_retrieve_s3_objects_line_by_line(context, prefix, output_file):
+    """Retrieve S3 objects and write each object content as a line in file."""
+    logger.info(f"Retrieving S3 objects from prefix {prefix} to file {output_file} line by line")
+    
+    try:
+        start_time = time.time()
+        context.s3_message_results = context.s3_connector.retrieve_s3_messages_to_file(
+            bucket_name=context.s3_bucket,
+            prefix=prefix,
+            output_file=output_file,
+            retrieve_mode='line_by_line'
+        )
+        context.s3_retrieve_duration = time.time() - start_time
+        
+        messages_count = context.s3_message_results.get('messages_written', 0)
+        logger.info(f"Retrieved {messages_count} S3 objects as lines in {context.s3_retrieve_duration:.2f} seconds")
+        
+    except Exception as e:
+        logger.error(f"Failed to retrieve S3 objects line by line: {str(e)}")
+        raise AssertionError(f"S3 line-by-line retrieval failed: {str(e)}")
+
+@when('I retrieve S3 objects from prefix "{prefix}" and write to file "{output_file}" as whole file')
+def step_retrieve_s3_objects_whole_file(context, prefix, output_file):
+    """Retrieve S3 objects and concatenate all content into single file."""
+    logger.info(f"Retrieving S3 objects from prefix {prefix} to file {output_file} as whole file")
+    
+    try:
+        start_time = time.time()
+        context.s3_message_results = context.s3_connector.retrieve_s3_messages_to_file(
+            bucket_name=context.s3_bucket,
+            prefix=prefix,
+            output_file=output_file,
+            retrieve_mode='whole_file'
+        )
+        context.s3_retrieve_duration = time.time() - start_time
+        
+        messages_count = context.s3_message_results.get('messages_written', 0)
+        logger.info(f"Retrieved {messages_count} S3 objects as whole file in {context.s3_retrieve_duration:.2f} seconds")
+        
+    except Exception as e:
+        logger.error(f"Failed to retrieve S3 objects as whole file: {str(e)}")
+        raise AssertionError(f"S3 whole file retrieval failed: {str(e)}")
+
+@when('I retrieve {max_messages:d} S3 objects from prefix "{prefix}" and write to file "{output_file}" line by line')
+def step_retrieve_limited_s3_objects_line_by_line(context, max_messages, prefix, output_file):
+    """Retrieve limited number of S3 objects and write each as a line in file."""
+    logger.info(f"Retrieving {max_messages} S3 objects from prefix {prefix} to file {output_file} line by line")
+    
+    try:
+        start_time = time.time()
+        context.s3_message_results = context.s3_connector.download_objects_as_messages(
+            bucket_name=context.s3_bucket,
+            prefix=prefix,
+            output_file=output_file,
+            one_message_per_line=True,
+            max_objects=max_messages
+        )
+        context.s3_retrieve_duration = time.time() - start_time
+        
+        messages_count = context.s3_message_results.get('messages_written', 0)
+        logger.info(f"Retrieved {messages_count}/{max_messages} S3 objects as lines in {context.s3_retrieve_duration:.2f} seconds")
+        
+    except Exception as e:
+        logger.error(f"Failed to retrieve limited S3 objects: {str(e)}")
+        raise AssertionError(f"S3 limited retrieval failed: {str(e)}")
+
+@when('I send file "{filename}" to S3 prefix "{prefix}" line by line')
+def step_send_file_to_s3_line_by_line(context, filename, prefix):
+    """Send file to S3 with each line as a separate S3 object."""
+    logger.info(f"Sending file {filename} to S3 prefix {prefix} line by line")
+    
+    try:
+        start_time = time.time()
+        context.s3_upload_results = context.s3_connector.send_file_to_s3_messages(
+            filename=filename,
+            bucket_name=context.s3_bucket,
+            prefix=prefix,
+            send_mode='line_by_line'
+        )
+        context.s3_upload_duration = time.time() - start_time
+        
+        uploaded_count = context.s3_upload_results.get('uploaded_count', 0)
+        total_lines = context.s3_upload_results.get('total_lines', 0)
+        logger.info(f"Uploaded {uploaded_count}/{total_lines} lines as S3 objects in {context.s3_upload_duration:.2f} seconds")
+        
+    except Exception as e:
+        logger.error(f"Failed to send file to S3 line by line: {str(e)}")
+        raise AssertionError(f"S3 line-by-line upload failed: {str(e)}")
+
+@when('I send file "{filename}" to S3 prefix "{prefix}" as whole file')
+def step_send_file_to_s3_whole_file(context, filename, prefix):
+    """Send entire file to S3 as a single S3 object."""
+    logger.info(f"Sending file {filename} to S3 prefix {prefix} as whole file")
+    
+    try:
+        start_time = time.time()
+        context.s3_upload_results = context.s3_connector.send_file_to_s3_messages(
+            filename=filename,
+            bucket_name=context.s3_bucket,
+            prefix=prefix,
+            send_mode='whole_file'
+        )
+        context.s3_upload_duration = time.time() - start_time
+        
+        uploaded_count = context.s3_upload_results.get('uploaded_count', 0)
+        logger.info(f"Uploaded {uploaded_count} file as S3 object in {context.s3_upload_duration:.2f} seconds")
+        
+    except Exception as e:
+        logger.error(f"Failed to send file to S3 as whole file: {str(e)}")
+        raise AssertionError(f"S3 whole file upload failed: {str(e)}")
+
+@when('I post message "{message_text}" to S3 as "{s3_key}"')
+def step_post_message_to_s3(context, message_text, s3_key):
+    """Post a single message directly to S3 as object content."""
+    logger.info(f"Posting message to S3: {s3_key}")
+    
+    try:
+        # Ensure s3_key includes the prefix if set
+        if hasattr(context, 's3_prefix') and context.s3_prefix:
+            if not s3_key.startswith(context.s3_prefix):
+                s3_key = f"{context.s3_prefix}/{s3_key}"
+        
+        success = context.s3_connector.put_object_content(
+            bucket_name=context.s3_bucket,
+            s3_key=s3_key,
+            content=message_text
+        )
+        
+        context.s3_message_post_result = {
+            'success': success,
+            's3_key': s3_key,
+            'message_length': len(message_text)
+        }
+        
+        if success:
+            logger.info(f"Message posted to s3://{context.s3_bucket}/{s3_key}")
+        else:
+            raise AssertionError("Failed to post message to S3")
+            
+    except Exception as e:
+        logger.error(f"Failed to post message to S3: {str(e)}")
+        raise AssertionError(f"S3 message post failed: {str(e)}")
+
+@when('I get S3 object content from "{s3_key}"')
+def step_get_s3_object_content(context, s3_key):
+    """Get content from S3 object as message."""
+    logger.info(f"Getting S3 object content: {s3_key}")
+    
+    try:
+        # Ensure s3_key includes the prefix if set
+        if hasattr(context, 's3_prefix') and context.s3_prefix:
+            if not s3_key.startswith(context.s3_prefix):
+                s3_key = f"{context.s3_prefix}/{s3_key}"
+        
+        content = context.s3_connector.get_object_content(
+            bucket_name=context.s3_bucket,
+            s3_key=s3_key
+        )
+        
+        context.s3_object_content = content
+        context.s3_retrieved_key = s3_key
+        
+        if content is not None:
+            logger.info(f"Retrieved content from s3://{context.s3_bucket}/{s3_key} ({len(content)} characters)")
+        else:
+            logger.warning(f"No content found for s3://{context.s3_bucket}/{s3_key}")
+            
+    except Exception as e:
+        logger.error(f"Failed to get S3 object content: {str(e)}")
+        raise AssertionError(f"S3 object content retrieval failed: {str(e)}")
+
+# S3 Message Verification Steps
+@then('S3 message retrieval should be successful')
+def step_verify_s3_message_retrieval_success(context):
+    """Verify S3 message retrieval was successful."""
+    logger.info("Verifying S3 message retrieval success")
+    
+    assert hasattr(context, 's3_message_results'), "No S3 message results available"
+    assert context.s3_message_results.get('success', False), "S3 message retrieval failed"
+    
+    messages_written = context.s3_message_results.get('messages_written', 0)
+    assert messages_written > 0, "No messages were written to file"
+    
+    logger.info(f"S3 message retrieval successful: {messages_written} messages written")
+
+@then('S3 should retrieve {expected_messages:d} messages to file')
+def step_verify_s3_messages_retrieved_count(context, expected_messages):
+    """Verify expected number of messages were retrieved from S3."""
+    logger.info(f"Verifying S3 retrieved {expected_messages} messages")
+    
+    assert hasattr(context, 's3_message_results'), "No S3 message results available"
+    actual_messages = context.s3_message_results.get('messages_written', 0)
+    
+    assert actual_messages == expected_messages, f"Expected {expected_messages} messages, got {actual_messages}"
+    
+    # Log performance metrics if available
+    if hasattr(context, 's3_retrieve_duration') and actual_messages > 0:
+        rate = actual_messages / context.s3_retrieve_duration
+        logger.info(f"S3 retrieval rate: {rate:.2f} messages/second")
+
+@then('S3 file upload should be successful with {expected_objects:d} objects')
+def step_verify_s3_file_upload_success(context, expected_objects):
+    """Verify S3 file upload was successful with expected object count."""
+    logger.info(f"Verifying S3 file upload with {expected_objects} objects")
+    
+    assert hasattr(context, 's3_upload_results'), "No S3 upload results available"
+    assert context.s3_upload_results.get('success', False), "S3 file upload failed"
+    
+    uploaded_count = context.s3_upload_results.get('uploaded_count', 0)
+    assert uploaded_count == expected_objects, f"Expected {expected_objects} objects, got {uploaded_count}"
+    
+    # Log performance metrics if available
+    if hasattr(context, 's3_upload_duration') and uploaded_count > 0:
+        rate = uploaded_count / context.s3_upload_duration
+        logger.info(f"S3 upload rate: {rate:.2f} objects/second")
+
+@then('S3 message should be posted successfully')
+def step_verify_s3_message_posted(context):
+    """Verify S3 message was posted successfully."""
+    logger.info("Verifying S3 message posted successfully")
+    
+    assert hasattr(context, 's3_message_post_result'), "No S3 message post result available"
+    assert context.s3_message_post_result.get('success', False), "S3 message post failed"
+    
+    s3_key = context.s3_message_post_result.get('s3_key')
+    message_length = context.s3_message_post_result.get('message_length', 0)
+    
+    logger.info(f"S3 message posted successfully to {s3_key} ({message_length} characters)")
+
+@then('S3 object content should be retrieved successfully')
+def step_verify_s3_object_content_retrieved(context):
+    """Verify S3 object content was retrieved successfully."""
+    logger.info("Verifying S3 object content retrieved successfully")
+    
+    assert hasattr(context, 's3_object_content'), "No S3 object content available"
+    assert context.s3_object_content is not None, "S3 object content is None"
+    assert len(context.s3_object_content) > 0, "S3 object content is empty"
+    
+    content_length = len(context.s3_object_content)
+    s3_key = getattr(context, 's3_retrieved_key', 'unknown')
+    
+    logger.info(f"S3 object content retrieved successfully from {s3_key} ({content_length} characters)")
+
+@then('S3 object content should contain "{expected_text}"')
+def step_verify_s3_object_content_contains(context, expected_text):
+    """Verify S3 object content contains expected text."""
+    logger.info(f"Verifying S3 object content contains: {expected_text}")
+    
+    assert hasattr(context, 's3_object_content'), "No S3 object content available"
+    assert context.s3_object_content is not None, "S3 object content is None"
+    assert expected_text in context.s3_object_content, f"Expected text '{expected_text}' not found in S3 object content"
+    
+    logger.info("S3 object content contains expected text")
+
+@then('S3 message processing should complete within {expected_time:d} seconds')
+def step_verify_s3_processing_time(context, expected_time):
+    """Verify S3 message processing completed within expected time."""
+    duration = getattr(context, 's3_retrieve_duration', 0) or getattr(context, 's3_upload_duration', 0)
+    
+    assert duration <= expected_time, f"S3 processing took {duration:.2f}s, expected under {expected_time}s"
+    
+    logger.info(f"S3 message processing completed in {duration:.2f} seconds")

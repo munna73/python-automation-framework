@@ -274,3 +274,286 @@ Scenario: Test file upload endpoint
     Then response status code should be 200
     And response field "data.customer.id" should equal "123"
     And response should not contain field "errors"
+
+  @regression @api @security @auth
+  Scenario: Test API endpoint with different authentication types
+    # Test Bearer token authentication
+    Given API authentication token "Bearer valid-token-123"
+    When I send GET request to "/protected/profile" endpoint
+    Then response status code should be 200
+    And request should have header "Authorization" with value "Bearer valid-token-123"
+    
+    # Test API key authentication
+    Given request headers:
+      | header_name | header_value |
+      | X-API-Key   | test-api-key |
+    When I send GET request to "/protected/data" endpoint
+    Then response status code should be 200
+
+  @regression @api @error
+  Scenario: Test comprehensive error handling
+    # Test 400 Bad Request
+    Given request payload:
+      """
+      {
+        "invalid_field": "test"
+      }
+      """
+    When I send POST request to "/customers" endpoint
+    Then response status code should be 400
+    And response should contain field "error"
+    And response field "error" should contain "validation"
+    
+    # Test 401 Unauthorized
+    When I send GET request to "/protected/admin" endpoint
+    Then response status code should be 401
+    And response should contain field "error"
+    
+    # Test 403 Forbidden
+    Given API authentication token "Bearer limited-token"
+    When I send DELETE request to "/admin/users/123" endpoint
+    Then response status code should be 403
+    
+    # Test 404 Not Found
+    When I send GET request to "/nonexistent/endpoint" endpoint
+    Then response status code should be 404
+    
+    # Test 429 Rate Limit
+    When I send 50 GET requests to "/rate-limited" endpoint
+    Then response status code should be 429
+
+  @regression @api @validation
+  Scenario: Test comprehensive input validation
+    # Test string length validation
+    Given request payload:
+      """
+      {
+        "name": "",
+        "email": "test@example.com"
+      }
+      """
+    When I send POST request to "/customers" endpoint
+    Then response status code should be 400
+    And response field "error" should contain "name"
+    
+    # Test email format validation
+    Given request payload:
+      """
+      {
+        "name": "Valid Name",
+        "email": "invalid-email"
+      }
+      """
+    When I send POST request to "/customers" endpoint
+    Then response status code should be 400
+    And response field "error" should contain "email"
+    
+    # Test required field validation
+    Given request payload:
+      """
+      {
+        "name": "Valid Name"
+      }
+      """
+    When I send POST request to "/customers" endpoint
+    Then response status code should be 400
+    And response field "error" should contain "required"
+
+  @performance @api @stress
+  Scenario: Test API under stress conditions
+    Given concurrent users count is 20
+    When I send 200 GET requests to "/customers" endpoint
+    Then average response time should be less than 1000 milliseconds
+    And 95th percentile response time should be less than 2000 milliseconds
+    And all responses should have status code 200
+
+  @integration @api @data_flow
+  Scenario: Test complete data flow through API
+    # Create a customer
+    Given request payload is loaded from "customer.json"
+    When I send POST request to "/customers" endpoint
+    Then response status code should be 201
+    And I store response field "id" as "customer_id"
+    
+    # Update the customer
+    Given request payload:
+      """
+      {
+        "name": "Updated Name",
+        "status": "premium"
+      }
+      """
+    When I send PATCH request to "/customers/{customer_id}" endpoint
+    Then response status code should be 200
+    And response field "name" should equal "Updated Name"
+    And response field "status" should equal "premium"
+    
+    # Create an order for the customer
+    Given request payload:
+      """
+      {
+        "customer_id": "{customer_id}",
+        "items": [
+          {"product_id": "prod-001", "quantity": 2, "price": 25.99},
+          {"product_id": "prod-002", "quantity": 1, "price": 49.99}
+        ],
+        "total": 101.97
+      }
+      """
+    When I send POST request to "/orders" endpoint
+    Then response status code should be 201
+    And I store response field "id" as "order_id"
+    And response field "customer_id" should equal stored value "customer_id"
+    
+    # Get customer with orders
+    When I send GET request to "/customers/{customer_id}/orders" endpoint
+    Then response status code should be 200
+    And response should be JSON array
+    And response array should have maximum 10 items
+    
+    # Delete the order
+    When I send DELETE request to "/orders/{order_id}" endpoint
+    Then response status code should be 204
+    
+    # Delete the customer
+    When I send DELETE request to "/customers/{customer_id}" endpoint
+    Then response status code should be 204
+
+  @regression @api @content_types
+  Scenario: Test different content types
+    # Test JSON content type
+    Given request headers:
+      | header_name  | header_value     |
+      | Content-Type | application/json |
+    And request payload:
+      """
+      {
+        "name": "JSON Customer",
+        "email": "json@example.com"
+      }
+      """
+    When I send POST request to "/customers" endpoint
+    Then response status code should be 201
+    And response header "Content-Type" should contain "application/json"
+    
+    # Test XML content type (if supported)
+    Given request headers:
+      | header_name  | header_value    |
+      | Content-Type | application/xml |
+      | Accept       | application/xml |
+    When I send GET request to "/customers" endpoint
+    Then response status code should be 200
+    And response header "Content-Type" should contain "xml"
+
+  @regression @api @caching
+  Scenario: Test API caching behavior
+    # First request
+    When I send GET request to "/customers/cached-data" endpoint
+    Then response status code should be 200
+    And response header "X-Cache-Status" should equal "MISS"
+    
+    # Second request should hit cache
+    When I send GET request to "/customers/cached-data" endpoint
+    Then response status code should be 200
+    And response header "X-Cache-Status" should equal "HIT"
+    And response time should be less than 100 milliseconds
+
+  @regression @api @versioning
+  Scenario: Test API versioning
+    # Test v1 endpoint
+    Given request headers:
+      | header_name   | header_value |
+      | Accept        | application/json |
+      | API-Version   | v1           |
+    When I send GET request to "/customers" endpoint
+    Then response status code should be 200
+    And response header "API-Version" should equal "v1"
+    
+    # Test v2 endpoint
+    Given request headers:
+      | header_name   | header_value |
+      | Accept        | application/json |
+      | API-Version   | v2           |
+    When I send GET request to "/customers" endpoint
+    Then response status code should be 200
+    And response header "API-Version" should equal "v2"
+
+  @regression @api @filtering_sorting
+  Scenario: Test API filtering and sorting
+    # Test filtering
+    Given query parameters:
+      | param_name | param_value |
+      | status     | active      |
+      | country    | USA         |
+      | limit      | 5           |
+    When I send GET request to "/customers" endpoint
+    Then response status code should be 200
+    And response should be JSON array
+    And response array should have maximum 5 items
+    And each item in response should have field "status" with value "active"
+    
+    # Test sorting
+    Given query parameters:
+      | param_name | param_value |
+      | sort       | name        |
+      | order      | desc        |
+      | limit      | 10          |
+    When I send GET request to "/customers" endpoint
+    Then response status code should be 200
+    And response should be JSON array
+    And response array should have maximum 10 items
+
+  @security @api @xss_prevention
+  Scenario: Test XSS prevention
+    Given request payload:
+      """
+      {
+        "name": "<script>alert('xss')</script>",
+        "email": "xss@example.com"
+      }
+      """
+    When I send POST request to "/customers" endpoint
+    Then response status code should be 201
+    And response field "name" should not contain "<script>"
+    And response field "name" should not contain "alert"
+
+  @regression @api @bulk_operations
+  Scenario: Test bulk operations
+    # Bulk create
+    Given request payload:
+      """
+      {
+        "customers": [
+          {"name": "Bulk Customer 1", "email": "bulk1@example.com"},
+          {"name": "Bulk Customer 2", "email": "bulk2@example.com"},
+          {"name": "Bulk Customer 3", "email": "bulk3@example.com"}
+        ]
+      }
+      """
+    When I send POST request to "/customers/bulk" endpoint
+    Then response status code should be 201
+    And response field "created_count" should equal "3"
+    And response should contain field "customer_ids"
+    
+    # Bulk update
+    Given request payload:
+      """
+      {
+        "filter": {"status": "pending"},
+        "update": {"status": "active"}
+      }
+      """
+    When I send PATCH request to "/customers/bulk" endpoint
+    Then response status code should be 200
+    And response should contain field "updated_count"
+    
+    # Bulk delete
+    Given request payload:
+      """
+      {
+        "filter": {"email": {"contains": "@example.com"}}
+      }
+      """
+    When I send DELETE request to "/customers/bulk" endpoint
+    Then response status code should be 200
+    And response should contain field "deleted_count"
