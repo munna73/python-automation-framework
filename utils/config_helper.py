@@ -3,7 +3,7 @@ On-demand configuration loading helper for test scenarios.
 Loads configuration only when needed by specific tests.
 """
 from typing import Optional, Dict, Any, Union
-from utils.config_loader import ConfigLoader, DatabaseConfig
+from utils.config_loader import ConfigLoader, DatabaseConfig, ConfigurationError
 from utils.logger import logger
 
 
@@ -19,20 +19,20 @@ class TestConfigHelper:
         """Ensure config loader is available in context."""
         if not hasattr(self.context, 'config_loader') or self.context.config_loader is None:
             try:
-                # Try to use the config directory if it exists, otherwise use default
-                import os
-                config_dir = "config" if os.path.exists("config") else None
-                self.context.config_loader = ConfigLoader(config_dir=config_dir)
-                logger.debug("ConfigLoader initialized on-demand")
+                # First try to use the global config_loader instance to avoid circular initialization
+                from utils.config_loader import config_loader
+                self.context.config_loader = config_loader
+                logger.debug("Using global config_loader instance")
             except Exception as e:
-                logger.error(f"Failed to initialize ConfigLoader: {e}")
-                # Try with the global config_loader instance as fallback
+                logger.error(f"Failed to use global config_loader: {e}")
+                # Only as last resort, try creating a new instance
                 try:
-                    from utils.config_loader import config_loader
-                    self.context.config_loader = config_loader
-                    logger.debug("Using global config_loader instance as fallback")
+                    import os
+                    config_dir = "config" if os.path.exists("config") else None
+                    self.context.config_loader = ConfigLoader(config_dir=config_dir)
+                    logger.debug("ConfigLoader initialized on-demand")
                 except Exception as fallback_error:
-                    logger.error(f"Fallback also failed: {fallback_error}")
+                    logger.error(f"Creating new ConfigLoader also failed: {fallback_error}")
                     raise e
     
     def load_database_config(self, section_name: str, required_env_vars: Optional[Dict[str, str]] = None) -> DatabaseConfig:
@@ -248,7 +248,47 @@ class TestConfigHelper:
 def get_config_helper(context) -> TestConfigHelper:
     """Get or create a TestConfigHelper for the current context."""
     if not hasattr(context, '_config_helper'):
-        context._config_helper = TestConfigHelper(context)
+        try:
+            context._config_helper = TestConfigHelper(context)
+        except Exception as e:
+            logger.error(f"Failed to create TestConfigHelper: {e}")
+            # Return a minimal config helper that uses the global config_loader
+            class MinimalConfigHelper:
+                def __init__(self, context):
+                    self.context = context
+                
+                def load_database_config(self, section_name: str, required_env_vars=None):
+                    # Try context config_loader first
+                    if hasattr(self.context, 'config_loader') and self.context.config_loader:
+                        try:
+                            return self.context.config_loader.get_db_config(section_name)
+                        except:
+                            pass
+                    
+                    # Try global config_loader as fallback
+                    try:
+                        from utils.config_loader import config_loader
+                        return config_loader.get_db_config(section_name)
+                    except Exception as e:
+                        raise ConfigurationError(f"Failed to load config for section '{section_name}': {e}")
+                
+                def load_api_config(self, section_name: str = 'API'):
+                    try:
+                        from utils.config_loader import config_loader
+                        return config_loader.get_api_config(section_name)
+                    except Exception as e:
+                        raise ConfigurationError(f"Failed to load API config for section '{section_name}': {e}")
+                
+                def load_custom_config(self, section_name: str, key: str):
+                    try:
+                        from utils.config_loader import config_loader
+                        return config_loader.get_custom_config(section_name, key)
+                    except Exception as e:
+                        raise ConfigurationError(f"Failed to load config '{key}' from section '{section_name}': {e}")
+            
+            context._config_helper = MinimalConfigHelper(context)
+            logger.info("Using minimal config helper as fallback")
+    
     return context._config_helper
 
 
