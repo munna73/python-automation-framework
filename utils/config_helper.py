@@ -19,11 +19,21 @@ class TestConfigHelper:
         """Ensure config loader is available in context."""
         if not hasattr(self.context, 'config_loader') or self.context.config_loader is None:
             try:
-                self.context.config_loader = ConfigLoader()
+                # Try to use the config directory if it exists, otherwise use default
+                import os
+                config_dir = "config" if os.path.exists("config") else None
+                self.context.config_loader = ConfigLoader(config_dir=config_dir)
                 logger.debug("ConfigLoader initialized on-demand")
             except Exception as e:
                 logger.error(f"Failed to initialize ConfigLoader: {e}")
-                raise
+                # Try with the global config_loader instance as fallback
+                try:
+                    from utils.config_loader import config_loader
+                    self.context.config_loader = config_loader
+                    logger.debug("Using global config_loader instance as fallback")
+                except Exception as fallback_error:
+                    logger.error(f"Fallback also failed: {fallback_error}")
+                    raise e
     
     def load_database_config(self, section_name: str, required_env_vars: Optional[Dict[str, str]] = None) -> DatabaseConfig:
         """

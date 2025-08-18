@@ -1269,11 +1269,13 @@ def load_configuration_from_file(context, config_file):
     try:
         # Initialize ConfigLoader for on-demand use
         if not hasattr(context, 'config_loader') or context.config_loader is None:
-            config_loader = ConfigLoader(config_dir="config")
-            context.config_loader = config_loader
+            # Use the global config_loader instance for consistency
+            from utils.config_loader import config_loader as global_config_loader
+            context.config_loader = global_config_loader
             logger.info(f"✅ Configuration loader initialized for: {config_file}")
         
         # Initialize config helper for this context
+        # The config helper will use the existing config_loader
         config_helper = get_config_helper(context)
         logger.info(f"✅ On-demand configuration helper ready")
         
