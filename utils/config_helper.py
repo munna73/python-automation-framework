@@ -261,14 +261,14 @@ def get_config_helper(context) -> TestConfigHelper:
                     # Try context config_loader first
                     if hasattr(self.context, 'config_loader') and self.context.config_loader:
                         try:
-                            return self.context.config_loader.get_db_config(section_name)
+                            return self.context.config_loader.get_database_config(section_name)
                         except:
                             pass
                     
                     # Try global config_loader as fallback
                     try:
                         from utils.config_loader import config_loader
-                        return config_loader.get_db_config(section_name)
+                        return config_loader.get_database_config(section_name)
                     except Exception as e:
                         raise ConfigurationError(f"Failed to load config for section '{section_name}': {e}")
                 
@@ -304,8 +304,52 @@ def load_db_config_when_needed(context, section_name: str, env_vars: Optional[Di
     Returns:
         DatabaseConfig object
     """
-    helper = get_config_helper(context)
-    return helper.load_database_config(section_name, env_vars)
+    # Set environment variables if provided
+    if env_vars:
+        import os
+        for env_var, value in env_vars.items():
+            os.environ[env_var] = value
+            logger.debug(f"Set environment variable {env_var} for {section_name}")
+    
+    # Use context config_loader directly if available, otherwise use global instance
+    if hasattr(context, 'config_loader') and context.config_loader:
+        config_loader_instance = context.config_loader
+    else:
+        from utils.config_loader import config_loader
+        config_loader_instance = config_loader
+        logger.debug("Using global config_loader instance")
+    
+    # Set appropriate tags based on the section being requested
+    tags_to_set = []
+    if '_ORACLE' in section_name.upper():
+        tags_to_set.append('oracle')
+    elif '_POSTGRES' in section_name.upper():
+        tags_to_set.append('postgres')
+    elif '_MONGODB' in section_name.upper():
+        tags_to_set.append('mongodb')
+    elif '_KAFKA' in section_name.upper():
+        tags_to_set.append('kafka')
+    elif '_MQ' in section_name.upper():
+        tags_to_set.append('mq')
+    elif '_SQS' in section_name.upper() or '_S3' in section_name.upper():
+        tags_to_set.append('aws')
+    else:
+        # Default to database tag for general database operations
+        tags_to_set.append('database')
+    
+    # Set tags on config loader to ensure proper section loading
+    if tags_to_set:
+        config_loader_instance.set_active_tags(tags_to_set)
+        logger.debug(f"Set active tags for {section_name}: {tags_to_set}")
+    
+    try:
+        logger.info(f"Loading database configuration for {section_name}")
+        db_config = config_loader_instance.get_database_config(section_name)
+        logger.info(f"✅ Database config loaded: {section_name} -> {db_config.host}:{db_config.port}")
+        return db_config
+    except Exception as e:
+        logger.error(f"❌ Failed to load database config for {section_name}: {e}")
+        raise ConfigurationError(f"Failed to load database configuration for '{section_name}': {str(e)}")
 
 
 def load_config_value_when_needed(context, section: str, key: str) -> Any:
@@ -320,5 +364,42 @@ def load_config_value_when_needed(context, section: str, key: str) -> Any:
     Returns:
         Configuration value
     """
-    helper = get_config_helper(context)
-    return helper.load_custom_config(section, key)
+    # Use context config_loader directly if available, otherwise use global instance
+    if hasattr(context, 'config_loader') and context.config_loader:
+        config_loader_instance = context.config_loader
+    else:
+        from utils.config_loader import config_loader
+        config_loader_instance = config_loader
+        logger.debug("Using global config_loader instance")
+    
+    try:
+        logger.debug(f"Loading configuration {section}.{key}")
+        value = config_loader_instance.get_custom_config(section, key)
+        logger.debug(f"✅ Config loaded: {section}.{key} = {value}")
+        return value
+    except Exception as e:
+        logger.error(f"❌ Failed to load config {section}.{key}: {e}")
+        # Fallback: read directly from config file
+        try:
+            import configparser
+            from pathlib import Path
+            
+            config_path = Path('config/config.ini')
+            if config_path.exists():
+                parser = configparser.ConfigParser()
+                parser.read(config_path)
+                
+                if section in parser and key in parser[section]:
+                    value = parser[section][key]
+                    logger.debug(f"✅ Config loaded via fallback: {section}.{key} = {value}")
+                    return value
+                elif 'DEFAULT' in parser and key in parser['DEFAULT']:
+                    value = parser['DEFAULT'][key]
+                    logger.debug(f"✅ Config loaded from DEFAULT: {section}.{key} = {value}")
+                    return value
+                else:
+                    raise ConfigurationError(f"Configuration key '{key}' not found in section '{section}'")
+            else:
+                raise ConfigurationError("Configuration file config.ini not found")
+        except Exception as fallback_error:
+            raise ConfigurationError(f"Failed to load config '{key}' from section '{section}': {fallback_error}")
