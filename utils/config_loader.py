@@ -207,12 +207,13 @@ class ConfigLoader:
             if env_value:
                 return env_value
             else:
-                raise ConfigurationError(
-                    f"Environment variable '{value}' not found. "
-                    f"Please set it as a system environment variable. "
-                    f"Context: {context}",
-                    config_key=value
+                # Instead of raising an error, log a warning and use literal value
+                # This makes configuration loading more tolerant of missing env vars
+                self.logger.warning(
+                    f"Environment variable '{value}' not found for {context}. "
+                    f"Using literal value '{value}'. Set the environment variable for proper resolution."
                 )
+                return value
         
         return value
     
@@ -409,12 +410,16 @@ class ConfigLoader:
             if detected_tags:
                 self.set_active_tags(detected_tags)
             else:
-                # No tags detected - this might be during import/initialization
-                # Use conservative approach: only load DEFAULT and minimal sections
-                self.logger.info("No tags detected, using conservative configuration loading")
-                self._active_tags = ['unit']  # Use minimal 'unit' tag for basic config
-                self._required_sections = {'DEFAULT'}
-                # Keep lazy loading enabled with minimal sections
+                # No tags detected - use broader loading instead of overly restrictive approach
+                self.logger.info("No tags detected, using broad configuration loading")
+                self._active_tags = ['database', 'api']  # Load database and API sections by default
+                # Include common sections that are likely to be needed
+                self._required_sections = {
+                    'DEFAULT', 'QUERIES', 'comparison_settings', 
+                    '*_ORACLE', '*_POSTGRES', '*_MONGODB',
+                    'API', '*_API'
+                }
+                # Keep lazy loading enabled but with broader section coverage
         
         with self._cache_lock:
             # Load full config first
