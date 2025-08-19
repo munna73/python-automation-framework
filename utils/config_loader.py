@@ -404,22 +404,21 @@ class ConfigLoader:
         for line in traceback.format_stack()[-3:]:
             self.logger.debug(f"  {line.strip()}")
         
-        # Auto-detect tags if not already set
+        # Auto-detect tags if not already set - but only apply if specific tags are detected
         if not self._active_tags and self._lazy_loading_enabled:
             detected_tags = self._auto_detect_active_tags()
             if detected_tags:
+                # Only apply tag-based filtering if tags are explicitly detected from test context
                 self.set_active_tags(detected_tags)
+                self.logger.info(f"Tag-based filtering enabled with detected tags: {detected_tags}")
             else:
-                # No tags detected - use broader loading instead of overly restrictive approach
-                self.logger.info("No tags detected, using broad configuration loading")
-                self._active_tags = ['database', 'api']  # Load database and API sections by default
-                # Include common sections that are likely to be needed
-                self._required_sections = {
-                    'DEFAULT', 'QUERIES', 'comparison_settings', 
-                    '*_ORACLE', '*_POSTGRES', '*_MONGODB',
-                    'API', '*_API'
-                }
-                # Keep lazy loading enabled but with broader section coverage
+                # No tags detected - load ALL sections by default (no filtering)
+                self.logger.info("No tags detected, loading ALL sections from config file")
+                # Clear any restrictions to ensure all sections are loaded
+                self._active_tags = []
+                self._required_sections = set()
+                # Keep lazy loading disabled for full config loading
+                self._lazy_loading_enabled = False
         
         with self._cache_lock:
             # Load full config first
@@ -504,7 +503,8 @@ class ConfigLoader:
     
     def _load_ini_config_lazy(self, file_path: Path) -> Dict[str, Any]:
         """
-        Load INI configuration file with lazy loading - only specified sections.
+        Load INI configuration file with support for loading all sections by default.
+        Tag-based filtering is now optional and only applied when explicitly enabled.
         """
         config = configparser.ConfigParser(interpolation=None)
         config.read(file_path, encoding='utf-8')
@@ -513,8 +513,16 @@ class ConfigLoader:
         loaded_count = 0
         skipped_count = 0
         
+        # Load ALL sections by default - no hardcoded restrictions
         for section in config.sections():
-            if self._should_load_section(section):
+            # Only apply tag-based filtering if explicitly enabled AND specific tags are set
+            if self._lazy_loading_enabled and self._active_tags and self._required_sections:
+                should_load = self._should_load_section(section)
+            else:
+                # Load all sections by default - no restrictions
+                should_load = True
+            
+            if should_load:
                 result[section] = {}
                 for key, value in config[section].items():
                     context = f"{section}.{key}"
@@ -531,7 +539,11 @@ class ConfigLoader:
                 skipped_count += 1
                 self.logger.debug(f"Skipping section '{section}' - not required by active tags")
         
-        self.logger.info(f"Tag-based loading: {loaded_count} sections loaded, {skipped_count} sections skipped")
+        if self._lazy_loading_enabled and self._active_tags and self._required_sections:
+            self.logger.info(f"Tag-based loading: {loaded_count} sections loaded, {skipped_count} sections skipped")
+        else:
+            self.logger.info(f"All sections loaded: {loaded_count} total sections from config file")
+        
         return result
     
     def _load_json_config(self, file_path: Path) -> Dict[str, Any]:
