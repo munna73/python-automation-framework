@@ -10,6 +10,7 @@ from botocore.exceptions import ClientError
 from typing import Optional, Dict, List
 import uuid
 import logging
+from utils.config_loader import config_loader
 
 # Configure basic logging
 logger = logging.getLogger(__name__)
@@ -24,15 +25,20 @@ class SqsConnector:
     A connector class for AWS SQS operations.
     """
 
-    def __init__(self, profile_name: Optional[str] = None):
+    def __init__(self, profile_name: Optional[str] = None, config_section: str = "S101_SQS"):
         """
         Initializes the SQS client.
 
         Args:
             profile_name (Optional[str]): The AWS profile name to use. If None,
-                                        the default profile is used.
+                                        uses environment variables from config.
+            config_section (str): SQS configuration section name (e.g., 'S101_SQS', 'S102_SQS')
         """
         self.profile_name = profile_name
+        self.config_section = config_section
+        self.sqs_config = None
+        if not profile_name:
+            self.sqs_config = config_loader.get_sqs_config(config_section)
         self.sqs_client = self._get_sqs_client()
 
     def _get_sqs_client(self):
@@ -41,25 +47,61 @@ class SqsConnector:
         """
         try:
             if self.profile_name:
+                # Use AWS profile
                 session = boto3.Session(profile_name=self.profile_name)
-                return session.client('sqs')
+                client = session.client('sqs')
+                logger.info(f"SQS client created using AWS profile: {self.profile_name}")
+                return client
+            elif self.sqs_config:
+                # Use environment variables from config.ini
+                client = boto3.client(
+                    'sqs',
+                    region_name=self.sqs_config.get('region', 'us-east-1'),
+                    aws_access_key_id=self.sqs_config.get('access_key_id'),
+                    aws_secret_access_key=self.sqs_config.get('secret_access_key'),
+                    aws_session_token=self.sqs_config.get('session_token')  # Optional for temporary credentials
+                )
+                logger.info(f"SQS client created using config section: {self.config_section}")
+                return client
             else:
-                return boto3.client('sqs')
+                # Fall back to default credentials (environment variables, IAM role, etc.)
+                client = boto3.client('sqs')
+                logger.info("SQS client created using default credentials")
+                return client
         except ClientError as e:
             logger.error(f"Error creating SQS client: {e}")
             raise
 
-    def test_connection(self, queue_url: str) -> bool:
+    def get_queue_url(self) -> str:
+        """
+        Get the queue URL from configuration.
+        
+        Returns:
+            Queue URL from configuration
+        """
+        if self.sqs_config:
+            return self.sqs_config.get('queue_url', '')
+        return ''
+
+    def test_connection(self, queue_url: str = None) -> bool:
         """
         Tests the connection to an SQS queue by attempting to get its attributes.
 
         Args:
-            queue_url (str): The URL of the SQS queue.
+            queue_url (str): The URL of the SQS queue. If None, uses queue URL from config.
 
         Returns:
             bool: True if the connection is successful, False otherwise.
         """
         try:
+            # Use queue URL from config if not provided
+            if queue_url is None:
+                queue_url = self.get_queue_url()
+            
+            if not queue_url:
+                logger.error("No queue URL provided and none found in configuration")
+                return False
+                
             self.sqs_client.get_queue_attributes(
                 QueueUrl=queue_url,
                 AttributeNames=['All']

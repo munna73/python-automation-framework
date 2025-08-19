@@ -117,42 +117,8 @@ class ConfigLoader:
         'retry_count': lambda x: int(x) >= 0,
     }
     
-    # Tag to section mapping - defines which sections are needed for each tag
-    TAG_TO_SECTIONS = {
-        'oracle': ['*_ORACLE', 'comparison_settings', 'QUERIES'],
-        'postgres': ['*_POSTGRES', 'comparison_settings', 'QUERIES'], 
-        'mongodb': ['*_MONGODB'],
-        'kafka': ['*_KAFKA'],
-        'mq': ['*_MQ', '*_MQ_FIFO'],
-        'aws': ['*_SQS', '*_S3'],
-        'sqs': ['*_SQS'],
-        's3': ['*_S3'],
-        'database': ['*_ORACLE', '*_POSTGRES', 'comparison_settings', 'QUERIES'],
-        'comparison': ['comparison_settings'],
-        'api': ['API', '*_API'],
-        # Environment-specific tags
-        'dev': ['DEFAULT', 'QUERIES'],
-        'qa': ['DEFAULT', 'QUERIES'],
-        'staging': ['DEFAULT', 'QUERIES'],
-        'prod': ['DEFAULT', 'QUERIES'],
-        # Specific system tags
-        'S101': ['S101_*'],
-        'S102': ['S102_*'],
-        'S103': ['S103_*'],
-        'P101': ['P101_*'],
-        'P102': ['P102_*'],
-        'P103': ['P103_*'],
-        # Common custom/test tags - minimal configuration
-        'my_test': ['DEFAULT', 'QUERIES'],
-        'custom': ['DEFAULT', 'QUERIES'],
-        'test': ['DEFAULT', 'QUERIES'],
-        'smoke': ['DEFAULT', 'QUERIES'],
-        'regression': ['DEFAULT', 'QUERIES'],
-        'integration': ['DEFAULT', 'QUERIES'],
-        'unit': ['DEFAULT'],
-        'performance': ['DEFAULT', 'QUERIES'],
-        'security': ['DEFAULT'],
-    }
+    # REMOVED: No longer using hardcoded TAG_TO_SECTIONS mapping
+    # All sections from config.ini are now loaded by default
     
     def __init__(self, config_dir: Optional[str] = None, cache_timeout: int = 300):
         """
@@ -291,39 +257,14 @@ class ConfigLoader:
     
     def _determine_required_sections(self) -> set:
         """
-        Determine which configuration sections are required based on active tags.
+        DEPRECATED: No longer determining required sections based on tags.
+        All sections are now loaded by default.
         
         Returns:
-            Set of section names/patterns that need to be loaded
+            Empty set since we load all sections
         """
-        required_sections = set()
-        
-        # Always include DEFAULT section
-        required_sections.add('DEFAULT')
-        
-        # Map tags to sections
-        matched_tags = []
-        for tag in self._active_tags:
-            if tag in self.TAG_TO_SECTIONS:
-                required_sections.update(self.TAG_TO_SECTIONS[tag])
-                matched_tags.append(tag)
-        
-        # Handle unknown/custom tags more intelligently
-        if len(required_sections) == 1:  # Only DEFAULT section matched
-            unmatched_tags = [tag for tag in self._active_tags if tag not in matched_tags]
-            
-            if unmatched_tags:
-                self.logger.info(f"Custom/unknown tags detected: {unmatched_tags}")
-                self.logger.info("Using minimal configuration loading for custom tags")
-                # For unknown tags, only load DEFAULT and QUERIES (minimal safe set)
-                required_sections.add('QUERIES')
-                # Keep lazy loading enabled but with minimal sections
-            else:
-                # No tags at all - fall back to loading everything
-                self.logger.warning("No tags found, disabling lazy loading")
-                self._lazy_loading_enabled = False
-        
-        return required_sections
+        # Return empty set - we load ALL sections by default now
+        return set()
     
     def _section_matches_pattern(self, section_name: str, pattern: str) -> bool:
         """
@@ -856,7 +797,13 @@ class ConfigLoader:
             # Build MQ configuration with environment variable resolution
             mq_config = {}
             for key, value in mq_section.items():
-                resolved_value = self._resolve_environment_variables(value)
+                # Simple environment variable resolution for MQ configs
+                if isinstance(value, str) and value.endswith('_PWD'):
+                    # Try to resolve password environment variable
+                    import os
+                    resolved_value = os.getenv(value, value)
+                else:
+                    resolved_value = value
                 
                 # Convert specific values to appropriate types
                 if key in ['port']:
@@ -1081,6 +1028,138 @@ class ConfigLoader:
             ])
         
         return summary
+    
+    def get_sqs_config(self, section_name: str = "S101_SQS") -> Dict[str, Any]:
+        """
+        Get SQS configuration from a specific section.
+        
+        Args:
+            section_name: SQS configuration section name (e.g., 'S101_SQS', 'S102_SQS')
+            
+        Returns:
+            Dictionary containing SQS configuration
+        """
+        try:
+            self.logger.debug(f"Loading SQS configuration from section: {section_name}")
+            
+            # Load configuration file
+            config = self.load_config_file('config.ini')
+            
+            if section_name not in config:
+                # Try to find any SQS section
+                sqs_sections = [s for s in config.keys() if 'SQS' in s.upper()]
+                if sqs_sections:
+                    section_name = sqs_sections[0]
+                    self.logger.info(f"Using SQS section: {section_name}")
+                else:
+                    # Return default SQS configuration
+                    self.logger.warning(f"SQS configuration section '{section_name}' not found, using defaults")
+                    return {
+                        'region': 'us-east-1',
+                        'queue_url': 'https://sqs.us-east-1.amazonaws.com/123456789012/default-queue',
+                        'access_key_id': '',
+                        'secret_access_key': ''
+                    }
+            
+            sqs_section = config[section_name]
+            
+            # Build SQS configuration with environment variable resolution
+            sqs_config = {}
+            for key, value in sqs_section.items():
+                # Simple environment variable resolution for SQS configs
+                if isinstance(value, str) and (key.endswith('_key_id') or key.endswith('_access_key') or key.endswith('_token')):
+                    # Try to resolve AWS credential environment variables
+                    import os
+                    resolved_value = os.getenv(value, value)
+                else:
+                    resolved_value = value
+                sqs_config[key] = resolved_value
+            
+            self.logger.info(f"SQS configuration loaded successfully from {section_name}")
+            return sqs_config
+            
+        except Exception as e:
+            self.logger.error(f"Failed to load SQS configuration: {e}")
+            # Return default configuration on error
+            self.logger.warning("Using default SQS configuration due to error")
+            return {
+                'region': 'us-east-1',
+                'queue_url': 'https://sqs.us-east-1.amazonaws.com/123456789012/default-queue',
+                'access_key_id': '',
+                'secret_access_key': ''
+            }
+    
+    def get_s3_config(self, section_name: str = "S101_S3") -> Dict[str, Any]:
+        """
+        Get S3 configuration from a specific section.
+        
+        Args:
+            section_name: S3 configuration section name (e.g., 'S101_S3', 'S102_S3')
+            
+        Returns:
+            Dictionary containing S3 configuration
+        """
+        try:
+            self.logger.debug(f"Loading S3 configuration from section: {section_name}")
+            
+            # Load configuration file
+            config = self.load_config_file('config.ini')
+            
+            if section_name not in config:
+                # Try to find any S3 section
+                s3_sections = [s for s in config.keys() if 'S3' in s.upper()]
+                if s3_sections:
+                    section_name = s3_sections[0]
+                    self.logger.info(f"Using S3 section: {section_name}")
+                else:
+                    # Return default S3 configuration
+                    self.logger.warning(f"S3 configuration section '{section_name}' not found, using defaults")
+                    return {
+                        'region': 'us-east-1',
+                        'bucket_name': 'default-bucket',
+                        'access_key_id': '',
+                        'secret_access_key': ''
+                    }
+            
+            s3_section = config[section_name]
+            
+            # Build S3 configuration with environment variable resolution
+            s3_config = {}
+            for key, value in s3_section.items():
+                # Simple environment variable resolution for S3 configs
+                if isinstance(value, str) and (key.endswith('_key_id') or key.endswith('_access_key') or key.endswith('_token')):
+                    # Try to resolve AWS credential environment variables
+                    import os
+                    resolved_value = os.getenv(value, value)
+                else:
+                    resolved_value = value
+                s3_config[key] = resolved_value
+            
+            self.logger.info(f"S3 configuration loaded successfully from {section_name}")
+            return s3_config
+            
+        except Exception as e:
+            self.logger.error(f"Failed to load S3 configuration: {e}")
+            # Return default configuration on error
+            self.logger.warning("Using default S3 configuration due to error")
+            return {
+                'region': 'us-east-1',
+                'bucket_name': 'default-bucket',
+                'access_key_id': '',
+                'secret_access_key': ''
+            }
+    
+    def get_aws_config(self, section_name: str = "S101_S3") -> Dict[str, Any]:
+        """
+        Get AWS configuration (alias for get_s3_config for backward compatibility).
+        
+        Args:
+            section_name: AWS configuration section name
+            
+        Returns:
+            Dictionary containing AWS configuration
+        """
+        return self.get_s3_config(section_name)
 
 
 # Example usage for your specific use case

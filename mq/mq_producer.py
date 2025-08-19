@@ -11,9 +11,15 @@ from utils.logger import logger, mq_logger
 class MQProducer:
     """IBM MQ producer for posting messages to queues."""
     
-    def __init__(self):
-        """Initialize MQ producer."""
-        self.config = config_loader.get_mq_config()
+    def __init__(self, config_section: str = "S101_MQ"):
+        """
+        Initialize MQ producer.
+        
+        Args:
+            config_section: MQ configuration section name (e.g., 'S101_MQ', 'LOCAL_MQ_ANONYMOUS')
+        """
+        self.config_section = config_section
+        self.config = config_loader.get_mq_config(config_section)
         self.queue_manager = None
         self.queue = None
         self.connection_params = None
@@ -27,12 +33,16 @@ class MQProducer:
                 'channel': self.config.get('channel'),
                 'host': self.config.get('host'),
                 'port': int(self.config.get('port', 1414)),
-                'username': self.config.get('username'),
-                'password': self.config.get('password'),
+                'username': self.config.get('username', ''),  # Default to empty string
+                'password': self.config.get('password', ''),  # Default to empty string
                 'queue_name': self.config.get('queue_name')
             }
             
-            mq_logger.info("MQ connection parameters configured")
+            # Log connection mode
+            if self.connection_params['username'] and self.connection_params['password']:
+                mq_logger.info("MQ connection parameters configured with authentication")
+            else:
+                mq_logger.info("MQ connection parameters configured without authentication (anonymous connection)")
             
         except Exception as e:
             mq_logger.error(f"Failed to setup MQ connection parameters: {e}")
@@ -53,19 +63,32 @@ class MQProducer:
             cd.ChannelType = pymqi.CMQC.MQCHT_CLNTCONN
             cd.TransportType = pymqi.CMQC.MQXPT_TCP
             
-            # Create security exit options if username/password provided
-            sco = pymqi.SCO()
-            if self.connection_params['username'] and self.connection_params['password']:
+            # Determine authentication mode
+            use_authentication = bool(self.connection_params['username'] and self.connection_params['password'])
+            
+            if use_authentication:
+                # Create security exit options for authenticated connection
+                sco = pymqi.SCO()
                 sco.AuthInfos = [pymqi.AuthInfo(authInfoType=pymqi.CMQC.MQAIT_IDPW,
                                               userId=self.connection_params['username'],
                                               password=self.connection_params['password'])]
-            
-            # Connect to queue manager
-            self.queue_manager = pymqi.connect(
-                self.connection_params['queue_manager'],
-                cd=cd,
-                sco=sco if self.connection_params['username'] else None
-            )
+                mq_logger.info(f"Connecting to MQ with authentication as user: {self.connection_params['username']}")
+                
+                # Connect to queue manager with authentication
+                self.queue_manager = pymqi.connect(
+                    self.connection_params['queue_manager'],
+                    cd=cd,
+                    sco=sco
+                )
+            else:
+                # Connect without authentication (anonymous/unauthenticated connection)
+                mq_logger.info("Connecting to MQ without authentication (anonymous connection)")
+                
+                # Connect to queue manager without security context
+                self.queue_manager = pymqi.connect(
+                    self.connection_params['queue_manager'],
+                    cd=cd
+                )
             
             # Open queue for output
             self.queue = pymqi.Queue(self.queue_manager, self.connection_params['queue_name'])

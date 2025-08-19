@@ -22,6 +22,7 @@ except ImportError as e:
     mq_consumer = None
 
 from utils.logger import logger, mq_logger
+import time
 
 @given('MQ connection is configured')
 def step_mq_connection_configured(context):
@@ -29,6 +30,16 @@ def step_mq_connection_configured(context):
     mq_logger.info("Verifying MQ connection configuration")
     context.mq_producer = mq_producer
     assert context.mq_producer.connection_params, "MQ connection not configured"
+
+@given('MQ connection is configured for "{config_section}"')
+def step_mq_connection_configured_for_section(context, config_section):
+    """Verify MQ connection is configured for specific configuration section."""
+    mq_logger.info(f"Verifying MQ connection configuration for {config_section}")
+    from mq.mq_producer import MQProducer
+    from mq.mq_consumer import MQConsumer
+    context.mq_producer = MQProducer(config_section)
+    context.mq_consumer = MQConsumer(config_section)
+    assert context.mq_producer.connection_params, f"MQ connection not configured for {config_section}"
 
 @when('I post message from "{filename}" as single message')
 def step_post_file_as_single_message(context, filename):
@@ -39,6 +50,18 @@ def step_post_file_as_single_message(context, filename):
         context.mq_result = context.mq_producer.post_file_as_single_message(filename)
     finally:
         context.mq_producer.disconnect()
+
+@when('I post message from "{filename}" as single message using "{config_section}"')
+def step_post_file_as_single_message_with_config(context, filename, config_section):
+    """Post file content as single message using specific MQ configuration."""
+    mq_logger.info(f"Posting file {filename} as single message using {config_section}")
+    from mq.mq_producer import MQProducer
+    producer = MQProducer(config_section)
+    producer.connect()
+    try:
+        context.mq_result = producer.post_file_as_single_message(filename)
+    finally:
+        producer.disconnect()
 
 @when('I post message from "{filename}" line by line')
 def step_post_file_line_by_line(context, filename):
@@ -59,6 +82,18 @@ def step_post_custom_message(context, message_text):
         context.mq_result = context.mq_producer.post_message(message_text)
     finally:
         context.mq_producer.disconnect()
+
+@when('I post custom message "{message_text}" using "{config_section}"')
+def step_post_custom_message_with_config(context, message_text, config_section):
+    """Post custom message text using specific MQ configuration."""
+    mq_logger.info(f"Posting custom message: {message_text} using {config_section}")
+    from mq.mq_producer import MQProducer
+    producer = MQProducer(config_section)
+    producer.connect()
+    try:
+        context.mq_result = producer.post_message(message_text)
+    finally:
+        producer.disconnect()
 
 @then('message should be posted successfully')
 def step_verify_message_posted(context):
@@ -126,6 +161,32 @@ def step_send_file_to_mq_line_by_line(context, filename):
     finally:
         context.mq_producer.disconnect()
 
+@when('I send file "{filename}" to MQ line by line using "{config_section}"')
+def step_send_file_to_mq_line_by_line_with_config(context, filename, config_section):
+    """Send file to MQ with each line as a separate message using specific configuration."""
+    mq_logger.info(f"Sending file {filename} to MQ line by line using {config_section}")
+    
+    from mq.mq_producer import MQProducer
+    producer = MQProducer(config_section)
+    producer.connect()
+    try:
+        start_time = time.time()
+        context.mq_file_result = producer.send_file_as_mq_messages(
+            filename=filename,
+            line_by_line=True
+        )
+        context.mq_send_duration = time.time() - start_time
+        
+        success_count = context.mq_file_result.get('success_count', 0)
+        total_lines = context.mq_file_result.get('total_lines', 0)
+        mq_logger.info(f"Sent {success_count}/{total_lines} lines as MQ messages to {config_section} in {context.mq_send_duration:.2f} seconds")
+        
+    except Exception as e:
+        mq_logger.error(f"Failed to send file to MQ line by line using {config_section}: {str(e)}")
+        raise AssertionError(f"MQ line-by-line send failed for {config_section}: {str(e)}")
+    finally:
+        producer.disconnect()
+
 @when('I send file "{filename}" to MQ as whole file')
 def step_send_file_to_mq_whole_file(context, filename):
     """Send entire file to MQ as a single message."""
@@ -171,6 +232,31 @@ def step_retrieve_mq_messages_line_by_line(context, output_file):
         raise AssertionError(f"MQ line-by-line retrieval failed: {str(e)}")
     finally:
         mq_consumer.disconnect()
+
+@when('I retrieve MQ messages from "{config_section}" and write to file "{output_file}" line by line')
+def step_retrieve_mq_messages_line_by_line_with_config(context, config_section, output_file):
+    """Retrieve MQ messages from specific configuration and write each message as a line in file."""
+    mq_logger.info(f"Retrieving MQ messages from {config_section} to file {output_file} line by line")
+    
+    from mq.mq_consumer import MQConsumer
+    consumer = MQConsumer(config_section)
+    consumer.connect()
+    try:
+        start_time = time.time()
+        context.mq_retrieve_result = consumer.retrieve_messages_to_file(
+            output_file=output_file,
+            one_message_per_line=True
+        )
+        context.mq_retrieve_duration = time.time() - start_time
+        
+        messages_count = context.mq_retrieve_result.get('messages_written', 0)
+        mq_logger.info(f"Retrieved {messages_count} MQ messages from {config_section} as lines in {context.mq_retrieve_duration:.2f} seconds")
+        
+    except Exception as e:
+        mq_logger.error(f"Failed to retrieve MQ messages from {config_section} line by line: {str(e)}")
+        raise AssertionError(f"MQ line-by-line retrieval failed for {config_section}: {str(e)}")
+    finally:
+        consumer.disconnect()
 
 @when('I retrieve MQ messages and write to file "{output_file}" as whole file')
 def step_retrieve_mq_messages_whole_file(context, output_file):
@@ -306,6 +392,29 @@ def step_get_mq_queue_depth(context):
         raise AssertionError(f"MQ queue depth retrieval failed: {str(e)}")
     finally:
         mq_consumer.disconnect()
+
+@when('I get MQ queue depth for "{config_section}"')
+def step_get_mq_queue_depth_for_config(context, config_section):
+    """Get current MQ queue depth for specific configuration."""
+    mq_logger.info(f"Getting MQ queue depth for {config_section}")
+    
+    from mq.mq_consumer import MQConsumer
+    consumer = MQConsumer(config_section)
+    consumer.connect()
+    try:
+        depth = consumer.get_queue_depth()
+        context.mq_queue_depth = depth
+        
+        if depth is not None:
+            mq_logger.info(f"MQ queue depth for {config_section}: {depth}")
+        else:
+            mq_logger.warning(f"Could not retrieve MQ queue depth for {config_section}")
+            
+    except Exception as e:
+        mq_logger.error(f"Failed to get MQ queue depth for {config_section}: {str(e)}")
+        raise AssertionError(f"MQ queue depth retrieval failed for {config_section}: {str(e)}")
+    finally:
+        consumer.disconnect()
 
 # MQ Message Verification Steps
 @then('MQ file should be sent successfully with {expected_messages:d} messages')

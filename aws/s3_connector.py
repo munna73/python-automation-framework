@@ -21,12 +21,19 @@ import time
 class S3Connector:
     """AWS S3 connector for file operations."""
     
-    def __init__(self, profile_name: Optional[str] = None):
-        """Initialize S3 connector."""
+    def __init__(self, profile_name: Optional[str] = None, config_section: str = "S101_S3"):
+        """
+        Initialize S3 connector.
+        
+        Args:
+            profile_name: AWS profile name to use. If None, uses environment variables from config.
+            config_section: S3 configuration section name (e.g., 'S101_S3', 'S102_S3')
+        """
         self.s3_client = None
         self.s3_resource = None
         self.aws_config = None
         self.profile_name = profile_name
+        self.config_section = config_section
         self.setup_aws_connection()
     
     def setup_aws_connection(self):
@@ -47,8 +54,8 @@ class S3Connector:
                 self.s3_resource = session.resource('s3', config=config)
                 logger.info(f"AWS S3 connection established using profile: {self.profile_name}")
             else:
-                # Use environment variables
-                self.aws_config = config_loader.get_aws_config()
+                # Use environment variables from config.ini
+                self.aws_config = config_loader.get_s3_config(self.config_section)
                 
                 # Create S3 client and resource
                 self.s3_client = boto3.client(
@@ -67,7 +74,7 @@ class S3Connector:
                     config=config
                 )
                 
-                logger.info("AWS S3 connection established successfully")
+                logger.info(f"AWS S3 connection established using config section: {self.config_section}")
             
         except NoCredentialsError:
             logger.error("AWS credentials not found. Please set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables")
@@ -75,6 +82,28 @@ class S3Connector:
         except Exception as e:
             logger.error(f"Failed to setup AWS S3 connection: {e}")
             raise
+
+    def get_bucket_name(self) -> str:
+        """
+        Get the bucket name from configuration.
+        
+        Returns:
+            Bucket name from configuration
+        """
+        if self.aws_config:
+            return self.aws_config.get('bucket_name', '')
+        return ''
+
+    def get_region(self) -> str:
+        """
+        Get the region from configuration.
+        
+        Returns:
+            Region from configuration
+        """
+        if self.aws_config:
+            return self.aws_config.get('region', 'us-east-1')
+        return 'us-east-1'
 
     def _create_progress_callback(self, filename: str, operation: str, total_size: int = None):
         """
