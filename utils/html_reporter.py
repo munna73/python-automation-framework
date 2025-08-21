@@ -93,7 +93,13 @@ class HTMLReportGenerator:
                     }
                     
                     scenario_failed = False
+                    scenario_skipped = False
                     scenario_duration = 0
+                    
+                    # Check if scenario has any steps with results - if not, it was likely skipped due to tags
+                    has_executed_steps = any(step.get('result') for step in element.get('steps', []))
+                    if not has_executed_steps and element.get('steps'):
+                        scenario_skipped = True
                     
                     for step in element.get('steps', []):
                         total_steps += 1
@@ -120,17 +126,25 @@ class HTMLReportGenerator:
                             # Get error message
                             error_msg = step.get('result', {}).get('error_message', '')
                             step_data['error_message'] = error_msg
+                        elif step_status in ['skipped', 'undefined', 'untested']:
+                            skipped_steps += 1
                         else:
+                            # Handle cases where there's no result (not executed due to tags)
                             skipped_steps += 1
                         
                         scenario['steps'].append(step_data)
                     
                     scenario['duration'] = scenario_duration
-                    scenario['status'] = 'failed' if scenario_failed else 'passed'
                     
-                    if scenario_failed:
+                    # Determine scenario status
+                    if scenario_skipped:
+                        scenario['status'] = 'skipped'
+                        skipped_scenarios += 1
+                    elif scenario_failed:
+                        scenario['status'] = 'failed'
                         failed_scenarios += 1
                     else:
+                        scenario['status'] = 'passed'
                         passed_scenarios += 1
                     
                     feature['scenarios'].append(scenario)

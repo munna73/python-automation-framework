@@ -20,7 +20,11 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --tags)
-            TAGS="--tags $2"
+            if [ -z "$TAGS" ]; then
+                TAGS="--tags=$2"
+            else
+                TAGS="$TAGS --tags=$2"
+            fi
             shift 2
             ;;
         --title)
@@ -36,17 +40,39 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --features DIR    Features directory or specific .feature files"
-            echo "  --tags TAGS       Tags to include/exclude (e.g., '@database')"
+            echo "  --tags TAGS       Tags to include/exclude (supports Behave tag expressions)"
             echo "  --title TITLE     Report title"
             echo "  --output DIR      Output directory for reports"
             echo "  --help, -h        Show this help message"
+            echo ""
+            echo "Tag Expressions (Behave syntax):"
+            echo "  @tag1             # Run scenarios with @tag1"
+            echo "  @tag1 @tag2       # Run scenarios with BOTH @tag1 AND @tag2"
+            echo "  '@tag1 or @tag2'  # Run scenarios with @tag1 OR @tag2"
+            echo "  '@tag1 and @tag2' # Run scenarios with @tag1 AND @tag2 (explicit)"
+            echo "  'not @skip'       # Run scenarios WITHOUT @skip tag"
+            echo "  '@db and not @slow' # Complex: @db tagged but not @slow"
             echo ""
             echo "Examples:"
             echo "  $0                                    # Run all tests"
             echo "  $0 --features features/database/     # Run database tests only"
             echo "  $0 --tags '@database'                # Run tests tagged with @database"
+            echo "  $0 @database                         # Run tests tagged with @database (shorthand)"
+            echo "  $0 @database @smoke                  # Run tests with multiple tags (AND condition)"
+            echo "  $0 --tags '@database or @smoke'      # Multiple tags OR condition (use 'or' keyword)"
+            echo "  $0 --tags '@database and @smoke'     # Multiple tags AND condition (use 'and' keyword)"
+            echo "  $0 --tags 'not @skip'                # Exclude tests with @skip tag"
             echo "  $0 --title 'My Test Report'          # Custom report title"
             exit 0
+            ;;
+        @*)
+            # Handle bare tag arguments (e.g., @sometag)
+            if [ -z "$TAGS" ]; then
+                TAGS="--tags=$1"
+            else
+                TAGS="$TAGS --tags=$1"
+            fi
+            shift
             ;;
         *)
             echo "Unknown option: $1"
@@ -72,7 +98,11 @@ echo ""
 
 # Run tests with Python script
 echo "🔄 Starting test execution..."
-python3 scripts/run_tests_with_reports.py $FEATURES_DIR $TAGS --title "$TITLE" --output "$OUTPUT_DIR"
+if [ -z "$TAGS" ]; then
+    python3 scripts/run_tests_with_reports.py $FEATURES_DIR --title "$TITLE" --output "$OUTPUT_DIR"
+else
+    python3 scripts/run_tests_with_reports.py $FEATURES_DIR $TAGS --title "$TITLE" --output "$OUTPUT_DIR"
+fi
 
 # Capture exit code
 EXIT_CODE=$?

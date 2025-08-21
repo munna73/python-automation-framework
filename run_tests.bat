@@ -23,9 +23,9 @@ if "%~1"=="--features" (
 )
 if "%~1"=="--tags" (
     if "%TAGS%"=="" (
-        set "TAGS=--tags %~2"
+        set "TAGS=--tags=%~2"
     ) else (
-        set "TAGS=%TAGS% --tags %~2"
+        set "TAGS=%TAGS% --tags=%~2"
     )
     shift
     shift
@@ -49,9 +49,9 @@ if "%~1"=="-h" goto show_help
 REM Handle bare tag arguments (e.g., @sometag)
 if "%~1:~0,1%"=="@" (
     if "%TAGS%"=="" (
-        set "TAGS=--tags %~1"
+        set "TAGS=--tags=%~1"
     ) else (
-        set "TAGS=%TAGS% --tags %~1"
+        set "TAGS=%TAGS% --tags=%~1"
     )
     shift
     goto parse_args
@@ -66,10 +66,18 @@ echo Usage: %0 [OPTIONS]
 echo.
 echo Options:
 echo   --features DIR    Features directory or specific .feature files
-echo   --tags TAGS       Tags to include/exclude (e.g., "@database" or "@db,@smoke")
+echo   --tags TAGS       Tags to include/exclude (supports Behave tag expressions)
 echo   --title TITLE     Report title
 echo   --output DIR      Output directory for reports
 echo   --help, -h        Show this help message
+echo.
+echo Tag Expressions (Behave syntax):
+echo   @tag1             # Run scenarios with @tag1
+echo   @tag1 @tag2       # Run scenarios with BOTH @tag1 AND @tag2
+echo   "@tag1 or @tag2"  # Run scenarios with @tag1 OR @tag2
+echo   "@tag1 and @tag2" # Run scenarios with @tag1 AND @tag2 (explicit)
+echo   "not @skip"       # Run scenarios WITHOUT @skip tag
+echo   "@db and not @slow" # Complex: @db tagged but not @slow
 echo.
 echo Examples:
 echo   %0                                    # Run all tests
@@ -77,8 +85,9 @@ echo   %0 --features features\database\     # Run database tests only
 echo   %0 --tags "@database"                # Run tests tagged with @database
 echo   %0 @database                         # Run tests tagged with @database (shorthand)
 echo   %0 @database @smoke                  # Run tests with multiple tags (AND condition)
-echo   %0 --tags "@database,@smoke"         # Multiple tags OR condition (comma-separated)
-echo   %0 --tags "@database" --tags "@smoke" # Multiple tags with AND condition (explicit format)
+echo   %0 --tags "@database or @smoke"      # Multiple tags OR condition (use 'or' keyword)
+echo   %0 --tags "@database and @smoke"     # Multiple tags AND condition (use 'and' keyword)
+echo   %0 --tags "not @skip"                # Exclude tests with @skip tag
 echo   %0 --title "My Test Report"          # Custom report title
 exit /b 0
 
@@ -112,7 +121,11 @@ if errorlevel 1 (
 
 REM Run tests with Python script
 echo 🔄 Starting test execution...
-python scripts\run_tests_with_reports.py %FEATURES_DIR% %TAGS% --title "%TITLE%" --output "%OUTPUT_DIR%"
+if "%TAGS%"=="" (
+    python scripts\run_tests_with_reports.py %FEATURES_DIR% --title "%TITLE%" --output "%OUTPUT_DIR%"
+) else (
+    python scripts\run_tests_with_reports.py %FEATURES_DIR% %TAGS% --title "%TITLE%" --output "%OUTPUT_DIR%"
+)
 
 REM Capture exit code
 set EXIT_CODE=%errorlevel%

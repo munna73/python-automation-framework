@@ -63,10 +63,15 @@ def run_tests_with_reports(
     else:
         behave_cmd.append("features/")
     
-    # Add tags
+    # Add tags - handle both --tags=value and --tags value formats
     if tags:
         for tag in tags:
-            behave_cmd.extend(["--tags", tag])
+            if "=" in tag:
+                # Format: --tags=@database
+                behave_cmd.append(tag)
+            else:
+                # Format: --tags @database
+                behave_cmd.extend(["--tags", tag])
     
     print(f"📋 Command: {' '.join(behave_cmd)}")
     print(f"📄 JSON Output: {json_output}")
