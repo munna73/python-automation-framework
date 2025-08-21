@@ -670,3 +670,113 @@ Feature: Enhanced Database Comparison with Advanced Omit Options
     And I print the comparison summary
     And I print performance metrics
     And I export all comparison results with timestamp
+
+  @database @perfect_match_verification @new_step_definitions
+  Scenario: Perfect match verification with enhanced delta analysis
+    When I enable progress monitoring
+    And I execute direct query "SELECT id, name, amount FROM perfect_match_test WHERE id <= 10" on Oracle as source
+    And I execute direct query "SELECT id, name, amount FROM perfect_match_test WHERE id <= 10" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    When I compare DataFrames using primary key "id"
+    Then the comparison should show a perfect match
+    And field match percentage should be 100.0%
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
+
+  @database @field_differences_count @delta_verification
+  Scenario: Field differences count verification with precise delta analysis
+    When I enable progress monitoring
+    And I execute direct query "SELECT emp_id, name, salary, status FROM employees_test WHERE emp_id <= 100" on Oracle as source
+    And I execute direct query "SELECT emp_id, name, salary, status FROM employees_test_modified WHERE emp_id <= 100" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    When I compare DataFrames using primary key "emp_id"
+    Then the comparison should show 5 field differences
+    And field match percentage should be 75.0%
+    And I print the comparison summary
+    And I print performance metrics
+
+  @database @enhanced_delta_analysis @comprehensive_verification
+  Scenario: Comprehensive delta analysis with multiple verification steps
+    When I enable progress monitoring
+    And I execute direct query "SELECT product_id, name, price, category, status FROM products_comparison WHERE product_id <= 50" on Oracle as source
+    And I execute direct query "SELECT product_id, name, price, category, status FROM products_comparison WHERE product_id <= 50" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    Given I set omit values to "DISCONTINUED,discontinued,INACTIVE,inactive"
+    When I compare DataFrames using primary key "product_id"
+    Then the comparison should show 0 field differences
+    And the comparison should show a perfect match
+    And field match percentage should be 100.0%
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
+
+  @database @partial_match_analysis @field_statistics
+  Scenario: Partial match analysis with detailed field statistics
+    When I enable progress monitoring
+    And I execute direct query "SELECT account_id, balance, status, last_updated, created_date FROM accounts_analysis" on Oracle as source
+    And I execute direct query "SELECT account_id, balance, status, last_updated, created_date FROM accounts_analysis_target" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    Given I set omit columns to "last_updated,created_date"
+    When I compare DataFrames using primary key "account_id"
+    Then the comparison should show 3 field differences
+    And field match percentage should be 66.67%
+    And I generate data quality report
+    And data quality score should be above "85.0"
+    And I print the comparison summary
+    And I print performance metrics
+
+  @database @perfect_match_with_omit @advanced_verification
+  Scenario: Perfect match verification with omit parameters demonstrating enhanced analysis
+    When I enable progress monitoring
+    And I execute direct query "SELECT customer_id, name, email, phone, status, created_date, notes FROM customers_perfect_match" on Oracle as source
+    And I execute direct query "SELECT customer_id, name, email, phone, status, created_date, notes FROM customers_perfect_match" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    When I perform comprehensive DataFrame comparison using primary key "customer_id" with omitted columns "created_date,notes" and omitted values "NULL,None,---,INACTIVE,inactive"
+    Then the comparison should show a perfect match
+    And field match percentage should be 100.0%
+    And I generate data quality report
+    And data quality score should be above "99.0%"
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
+
+  @database @delta_analysis_edge_cases @boundary_testing
+  Scenario: Delta analysis with edge cases and boundary conditions
+    When I enable progress monitoring
+    And I execute direct query "SELECT test_id, numeric_field, text_field, boolean_field FROM delta_edge_cases" on Oracle as source
+    And I execute direct query "SELECT test_id, numeric_field, text_field, boolean_field FROM delta_edge_cases_modified" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    When I compare DataFrames using primary key "test_id"
+    Then the comparison should show 2 field differences
+    And field match percentage should be 50.0%
+    And field "numeric_field" should have "0" delta records
+    And field "text_field" should have "1" delta records  
+    And field "boolean_field" should have "1" delta records
+    And I print the comparison summary
+    And I print performance metrics
+
+  @database @zero_differences_validation @perfect_match_edge_case
+  Scenario: Zero differences validation ensuring perfect match detection works correctly
+    When I enable progress monitoring
+    And I execute direct query "SELECT order_id, customer_id, amount, status FROM orders_identical WHERE order_date >= CURRENT_DATE - 7" on Oracle as source
+    And I execute direct query "SELECT order_id, customer_id, amount, status FROM orders_identical WHERE order_date >= CURRENT_DATE - 7" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    When I compare DataFrames using primary key "order_id"
+    Then the comparison should show 0 field differences
+    And the comparison should show a perfect match  
+    And field match percentage should be 100.0%
+    And there should be no missing records in either DataFrame
+    And all fields should match between source and target DataFrames
+    And I generate data quality report
+    And data quality score should be above "100.0"
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
