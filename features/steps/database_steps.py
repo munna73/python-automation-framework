@@ -643,26 +643,34 @@ class EnhancedDatabaseComparisonManager:
         return self.comparison_results
     
     def _prepare_dataframes_for_comparison(self, source_df: pd.DataFrame, target_df: pd.DataFrame) -> tuple:
-        """Prepare DataFrames for comparison with type-aware processing"""
+        """Prepare DataFrames for comparison with numeric type normalization"""
         self.performance_monitor.start_timer('dataframe_preparation')
         
-        # Enhanced type-aware conversion
+        # Enhanced type-aware conversion with numeric normalization
         source_processed = source_df.copy()
         target_processed = target_df.copy()
         
         for col in source_processed.columns:
             if col in target_processed.columns:
-                # Try to preserve numeric types where possible
-                if (source_processed[col].dtype in ['int64', 'float64'] and 
-                    target_processed[col].dtype in ['int64', 'float64']):
-                    # Keep numeric for numeric comparison
-                    continue
+                source_dtype = source_processed[col].dtype
+                target_dtype = target_processed[col].dtype
+                
+                # Handle numeric columns with potential int/float differences (1234 vs 1234.0)
+                if (source_dtype in ['int64', 'float64', 'int32', 'float32'] or 
+                    target_dtype in ['int64', 'float64', 'int32', 'float32']):
+                    
+                    logger.debug(f"Normalizing numeric column '{col}': source_dtype={source_dtype}, target_dtype={target_dtype}")
+                    
+                    # Convert both to string and normalize numeric representation
+                    source_processed[col] = self._normalize_numeric_values(source_processed[col])
+                    target_processed[col] = self._normalize_numeric_values(target_processed[col])
+                    
                 else:
                     # Convert to string for consistent comparison
                     source_processed[col] = source_processed[col].astype(str)
                     target_processed[col] = target_processed[col].astype(str)
                     
-                    # Handle numeric precision issues using compiled regex
+                    # Handle non-numeric precision issues using compiled regex
                     source_processed[col] = source_processed[col].apply(
                         lambda x: self._regex_patterns['trailing_zeros'].sub('', x)
                     )
@@ -672,6 +680,52 @@ class EnhancedDatabaseComparisonManager:
         
         self.performance_monitor.end_timer('dataframe_preparation')
         return source_processed, target_processed
+    
+    def _normalize_numeric_values(self, series: pd.Series) -> pd.Series:
+        """Normalize numeric values to handle int/float representation differences"""
+        try:
+            # Convert to string first
+            str_series = series.astype(str)
+            
+            # For each value, try to normalize numeric representation
+            normalized_series = str_series.apply(self._normalize_single_numeric_value)
+            
+            logger.debug(f"Normalized {len(series)} numeric values in column")
+            return normalized_series
+            
+        except Exception as e:
+            logger.warning(f"Failed to normalize numeric series: {e}, falling back to string conversion")
+            return series.astype(str)
+    
+    def _normalize_single_numeric_value(self, value: str) -> str:
+        """Normalize a single numeric value string"""
+        try:
+            # Handle NaN, None, empty values
+            if value in ['nan', 'None', '', 'NaN', 'null', 'NULL']:
+                return value
+            
+            # Try to parse as float and convert back to remove trailing zeros
+            try:
+                # Parse as float to handle both int and float representations
+                numeric_val = float(value)
+                
+                # Check if it's actually an integer value (no fractional part)
+                if numeric_val.is_integer():
+                    # Return as integer string to avoid .0 suffix
+                    return str(int(numeric_val))
+                else:
+                    # Return as float but remove trailing zeros
+                    formatted = f"{numeric_val:g}"  # %g format removes trailing zeros
+                    return formatted
+                    
+            except (ValueError, OverflowError):
+                # If parsing fails, apply regex to remove trailing zeros
+                return self._regex_patterns['trailing_zeros'].sub('', value)
+                
+        except Exception as e:
+            # If all else fails, return original value
+            logger.debug(f"Could not normalize numeric value '{value}': {e}")
+            return value
     
     def _perform_field_comparison(self, source_indexed: pd.DataFrame, target_indexed: pd.DataFrame,
                                  common_keys: List, columns_to_compare: List, omit_values_lower: set,
@@ -1400,7 +1454,7 @@ def execute_oracle_query_as_source(context):
 
 @when('I compare DataFrames using primary key "{primary_key}"')
 def compare_dataframes_basic(context, primary_key):
-    """Compare DataFrames using specified primary key (basic version)"""
+    """Compare DataFrames using specified primary key (basic version with optional omit support)"""
     try:
         # Validate inputs before comparison
         if db_comparison_manager.source_df is None:
@@ -1408,10 +1462,18 @@ def compare_dataframes_basic(context, primary_key):
         if db_comparison_manager.target_df is None:
             raise ValueError("Target DataFrame is None")
         
+        # Check if context has omit parameters from previous steps
+        omit_columns = getattr(context, 'omit_columns', None)
+        omit_values = getattr(context, 'omit_values', None)
+        
         context.comparison_results = db_comparison_manager.compare_dataframes(
-            primary_key, omit_columns=None, omit_values=None
+            primary_key, omit_columns=omit_columns, omit_values=omit_values
         )
-        logger.info(f"Basic comparison completed using primary key: {primary_key}")
+        
+        if omit_columns or omit_values:
+            logger.info(f"Basic comparison completed using primary key: {primary_key}, with omit_columns: {omit_columns}, omit_values: {omit_values}")
+        else:
+            logger.info(f"Basic comparison completed using primary key: {primary_key}")
         
     except Exception as e:
         logger.error(f"Failed to compare DataFrames: {str(e)}")
@@ -1419,7 +1481,7 @@ def compare_dataframes_basic(context, primary_key):
 
 @when('I compare DataFrames using primary key from config section "{section_name}"')
 def compare_dataframes_from_config(context, section_name):
-    """Compare DataFrames using primary key from config section"""
+    """Compare DataFrames using primary key from config section (with optional omit support)"""
     try:
         # Load primary key configuration on-demand
         logger.info(f"🔄 Loading primary key from config section: {section_name}")
@@ -1432,10 +1494,18 @@ def compare_dataframes_from_config(context, section_name):
         if db_comparison_manager.target_df is None:
             raise ValueError("Target DataFrame is None")
         
+        # Check if context has omit parameters from previous steps
+        omit_columns = getattr(context, 'omit_columns', None)
+        omit_values = getattr(context, 'omit_values', None)
+        
         context.comparison_results = db_comparison_manager.compare_dataframes(
-            primary_key, omit_columns=None, omit_values=None
+            primary_key, omit_columns=omit_columns, omit_values=omit_values
         )
-        logger.info(f"Config-driven comparison completed using primary key: {primary_key}")
+        
+        if omit_columns or omit_values:
+            logger.info(f"Config-driven comparison completed using primary key: {primary_key}, with omit_columns: {omit_columns}, omit_values: {omit_values}")
+        else:
+            logger.info(f"Config-driven comparison completed using primary key: {primary_key}")
         
     except Exception as e:
         logger.error(f"Failed to compare DataFrames from config: {str(e)}")
@@ -2015,7 +2085,86 @@ def compare_dataframes_with_omit_values(context, primary_key, omit_values):
         logger.error(f"Failed to compare DataFrames: {str(e)}")
         raise
 
-# Removed problematic step definition - Behave pattern conflicts resolved
+# Comprehensive step definition supporting both omit_columns and omit_values
+@when('I perform comprehensive DataFrame comparison using primary key "{primary_key}" with omitted columns "{omit_columns}" and omitted values "{omit_values}"')
+def compare_dataframes_with_omit_columns_and_values(context, primary_key, omit_columns, omit_values):
+    """Compare DataFrames using specified primary key with both omitted columns and values"""
+    try:
+        # Parse comma-separated column names and values
+        omit_columns_list = [col.strip() for col in omit_columns.split(',') if col.strip()] if omit_columns else None
+        omit_values_list = [val.strip() for val in omit_values.split(',') if val.strip()] if omit_values else None
+        
+        context.comparison_results = db_comparison_manager.compare_dataframes(
+            primary_key, omit_columns=omit_columns_list, omit_values=omit_values_list
+        )
+        logger.info(f"Comprehensive comparison completed using primary key: {primary_key}, omitting columns: {omit_columns_list}, treating as equal: {omit_values_list}")
+        
+    except Exception as e:
+        logger.error(f"Failed to compare DataFrames: {str(e)}")
+        raise
+
+# Helper steps to set omit parameters for use with basic comparison steps
+@given('I set omit columns to "{omit_columns}"')
+def set_omit_columns_in_context(context, omit_columns):
+    """Set omit columns in context for use with basic comparison steps"""
+    if omit_columns and omit_columns.lower() not in ['none', 'null', '']:
+        context.omit_columns = [col.strip() for col in omit_columns.split(',') if col.strip()]
+    else:
+        context.omit_columns = None
+    logger.info(f"Set omit columns in context: {context.omit_columns}")
+
+@given('I set omit values to "{omit_values}"')
+def set_omit_values_in_context(context, omit_values):
+    """Set omit values in context for use with basic comparison steps"""
+    if omit_values and omit_values.lower() not in ['none', 'null', '']:
+        context.omit_values = [val.strip() for val in omit_values.split(',') if val.strip()]
+    else:
+        context.omit_values = None
+    logger.info(f"Set omit values in context: {context.omit_values}")
+
+@given('I clear omit parameters')
+def clear_omit_parameters(context):
+    """Clear any previously set omit parameters"""
+    context.omit_columns = None
+    context.omit_values = None
+    logger.info("Cleared omit parameters from context")
+
+# Optional parameter step definitions for flexible usage
+@when('I compare DataFrames using primary key "{primary_key}" with optional omit columns "{omit_columns}"')
+def compare_dataframes_with_optional_omit_columns(context, primary_key, omit_columns):
+    """Compare DataFrames with optional omit columns (use 'none' or empty to skip)"""
+    try:
+        # Handle 'none' or empty string as no omission
+        omit_columns_list = None
+        if omit_columns and omit_columns.lower() not in ['none', 'null', '']:
+            omit_columns_list = [col.strip() for col in omit_columns.split(',') if col.strip()]
+        
+        context.comparison_results = db_comparison_manager.compare_dataframes(
+            primary_key, omit_columns=omit_columns_list, omit_values=None
+        )
+        logger.info(f"Optional omit columns comparison completed using primary key: {primary_key}, omitting columns: {omit_columns_list}")
+        
+    except Exception as e:
+        logger.error(f"Failed to compare DataFrames: {str(e)}")
+        raise
+
+@when('I compare DataFrames using primary key "{primary_key}" with optional omit values "{omit_values}"')
+def compare_dataframes_with_optional_omit_values(context, primary_key, omit_values):
+    """Compare DataFrames with optional omit values (use 'none' or empty to skip)"""
+    try:
+        # Handle 'none' or empty string as no omission
+        omit_values_list = None
+        if omit_values and omit_values.lower() not in ['none', 'null', '']:
+            omit_values_list = [val.strip() for val in omit_values.split(',') if val.strip()]
+        
+        context.comparison_results = db_comparison_manager.compare_dataframes(
+            primary_key, omit_columns=None, omit_values=omit_values_list
+        )
+        logger.info(f"Optional omit values comparison completed using primary key: {primary_key}, treating as equal: {omit_values_list}")
+        
+    except Exception as e:
+        logger.error(f"Failed to compare DataFrames: {str(e)}")
+        raise
 
 # Enhanced verification steps with better error messages
 @then('the source DataFrame should have "{expected_count:d}" records')
