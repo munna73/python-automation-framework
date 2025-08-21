@@ -554,3 +554,119 @@ Feature: Enhanced Database Comparison with Advanced Omit Options
     And I print performance metrics
     And I export all comparison results with timestamp
     And I save comparison results as JSON file "financial_precision_validation.json"
+
+  @database @context_based_omit @new_functionality
+  Scenario: Context-based omit parameters with basic comparison steps
+    When I enable progress monitoring
+    And I execute direct query "SELECT emp_id, name, salary, department, created_date, modified_date, status FROM employees" on Oracle as source
+    And I execute direct query "SELECT emp_id, name, salary, department, created_date, modified_date, status FROM employees" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    Given I set omit columns to "created_date,modified_date"
+    And I set omit values to "INACTIVE,inactive,NULL,None"
+    When I compare DataFrames using primary key "emp_id"
+    Then I generate data quality report
+    And data quality score should be above "95.0"
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
+
+  @database @comprehensive_omit @advanced_functionality
+  Scenario: Comprehensive DataFrame comparison with both omit columns and values
+    When I enable progress monitoring
+    And I execute direct query "SELECT product_id, name, description, price, status, created_date, updated_date, notes FROM products" on Oracle as source
+    And I execute direct query "SELECT product_id, name, description, price, status, created_date, updated_date, notes FROM products" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    When I perform comprehensive DataFrame comparison using primary key "product_id" with omitted columns "created_date,updated_date,notes" and omitted values "DISCONTINUED,discontinued,NULL,None,N/A,---"
+    Then I generate data quality report
+    And data quality score should be above "92.0"
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
+
+  @database @optional_omit_columns @flexible_usage
+  Scenario: Optional omit columns with flexible parameter handling
+    When I enable progress monitoring
+    And I execute direct query "SELECT customer_id, name, email, phone, address, created_date, status FROM customers" on Oracle as source
+    And I execute direct query "SELECT customer_id, name, email, phone, address, created_date, status FROM customers" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    When I compare DataFrames using primary key "customer_id" with optional omit columns "created_date"
+    Then I generate data quality report
+    And data quality score should be above "90.0"
+    And I print the comparison summary
+    And I print performance metrics
+
+  @database @optional_omit_values @null_flexibility
+  Scenario: Optional omit values with NULL handling flexibility
+    When I enable progress monitoring
+    And I execute direct query "SELECT order_id, customer_id, amount, status, notes FROM orders" on Oracle as source
+    And I execute direct query "SELECT order_id, customer_id, amount, status, notes FROM orders" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    When I compare DataFrames using primary key "order_id" with optional omit values "CANCELLED,cancelled,NULL,None,---"
+    Then I generate data quality report
+    And data quality score should be above "88.0"
+    And I print the comparison summary
+    And I print performance metrics
+
+  @database @context_management @parameter_control
+  Scenario: Context parameter management with clear functionality
+    When I enable progress monitoring
+    And I execute direct query "SELECT transaction_id, account_id, amount, type, status, created_date FROM transactions" on Oracle as source
+    And I execute direct query "SELECT transaction_id, account_id, amount, type, status, created_date FROM transactions" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    Given I set omit columns to "created_date"
+    And I set omit values to "PENDING,pending,FAILED,failed"
+    When I compare DataFrames using primary key "transaction_id"
+    Then I generate data quality report
+    And data quality score should be above "93.0"
+    Given I clear omit parameters
+    When I compare DataFrames using primary key "transaction_id"
+    Then I generate data quality report
+    And I print the comparison summary
+    And I print performance metrics
+
+  @database @numeric_precision @type_normalization
+  Scenario: Numeric precision handling with int/float normalization
+    When I enable progress monitoring
+    And I execute direct query "SELECT account_id, balance, credit_limit, interest_rate FROM accounts WHERE account_type = 'SAVINGS'" on Oracle as source
+    And I execute direct query "SELECT account_id, balance, credit_limit, interest_rate FROM accounts WHERE account_type = 'SAVINGS'" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    When I compare DataFrames using primary key "account_id"
+    Then I generate data quality report
+    And data quality score should be above "98.0"
+    And field "balance" should have "0" delta records
+    And field "credit_limit" should have "0" delta records
+    And field "interest_rate" should have "0" delta records
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
+
+  @database @mixed_omit_strategies @production_workflow
+  Scenario: Production workflow with mixed omit strategies and context switching
+    When I enable progress monitoring
+    And I execute direct query "SELECT user_id, username, email, status, last_login, created_date, profile_data FROM users" on Oracle as source
+    And I execute direct query "SELECT user_id, username, email, status, last_login, created_date, profile_data FROM users" on PostgreSQL as target
+    And I validate data quality for source DataFrame
+    And I validate data quality for target DataFrame
+    # First comparison with context-based omit
+    Given I set omit columns to "last_login,created_date"
+    When I compare DataFrames using primary key "user_id"
+    Then I generate data quality report
+    And data quality score should be above "94.0"
+    # Clear and use different strategy
+    Given I clear omit parameters
+    When I compare DataFrames using primary key "user_id" with optional omit values "SUSPENDED,suspended,INACTIVE,inactive"
+    Then I generate data quality report
+    And data quality score should be above "92.0"
+    # Use comprehensive approach
+    When I perform comprehensive DataFrame comparison using primary key "user_id" with omitted columns "profile_data" and omitted values "NULL,None,---"
+    Then I generate data quality report
+    And data quality score should be above "96.0"
+    And I print the comparison summary
+    And I print performance metrics
+    And I export all comparison results with timestamp
