@@ -83,7 +83,7 @@ def step_post_custom_message(context, message_text):
     finally:
         context.mq_producer.disconnect()
 
-@when('I post custom message "{message_text}" using "{config_section}"')
+@when('I send custom message "{message_text}" using MQ config "{config_section}"')
 def step_post_custom_message_with_config(context, message_text, config_section):
     """Post custom message text using specific MQ configuration."""
     mq_logger.info(f"Posting custom message: {message_text} using {config_section}")

@@ -2188,7 +2188,7 @@ def clear_omit_parameters(context):
     logger.info("Cleared omit parameters from context")
 
 # Optional parameter step definitions for flexible usage
-@when('I compare DataFrames using primary key "{primary_key}" with optional omit columns "{omit_columns}"')
+@when('I perform DataFrame comparison with primary key "{primary_key}" and optional omit columns "{omit_columns}"')
 def compare_dataframes_with_optional_omit_columns(context, primary_key, omit_columns):
     """Compare DataFrames with optional omit columns (use 'none' or empty to skip)"""
     try:
@@ -2206,7 +2206,7 @@ def compare_dataframes_with_optional_omit_columns(context, primary_key, omit_col
         logger.error(f"Failed to compare DataFrames: {str(e)}")
         raise
 
-@when('I compare DataFrames using primary key "{primary_key}" with optional omit values "{omit_values}"')
+@when('I perform DataFrame comparison with primary key "{primary_key}" and optional omit values "{omit_values}"')
 def compare_dataframes_with_optional_omit_values(context, primary_key, omit_values):
     """Compare DataFrames with optional omit values (use 'none' or empty to skip)"""
     try:
