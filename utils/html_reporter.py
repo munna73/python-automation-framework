@@ -123,9 +123,11 @@ class HTMLReportGenerator:
                             failed_steps += 1
                             scenario_failed = True
                             feature_failed = True
-                            # Get error message
+                            # Get error message - handle both string and list formats
                             error_msg = step.get('result', {}).get('error_message', '')
-                            step_data['error_message'] = error_msg
+                            if isinstance(error_msg, list):
+                                error_msg = '\n'.join(str(msg) for msg in error_msg)
+                            step_data['error_message'] = str(error_msg)
                         elif step_status in ['skipped', 'undefined', 'untested']:
                             skipped_steps += 1
                         else:

@@ -452,16 +452,6 @@ Feature: Enhanced Database Comparison and Data Validation
     And I print performance metrics
     And I export all comparison results with timestamp
 
-Feature: Enhanced Database Comparison with Advanced Omit Options
-  As a senior data engineer
-  I want to perform sophisticated data comparisons with flexible omit capabilities
-  So that I can conduct precise data validation while ignoring irrelevant differences
-
-  Background:
-    Given I load configuration from "config.ini"
-    And I connect to Oracle database using "SAT_ORACLE" configuration
-    And I connect to PostgreSQL database using "SAT_POSTGRES" configuration
-
   @database @enhanced_basic_comparison @performance
   Scenario: Enhanced basic comparison with performance monitoring
     When I enable progress monitoring
