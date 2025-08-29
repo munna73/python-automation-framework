@@ -4,7 +4,6 @@ This is a robust and feature-rich connector that handles single and parallel
 file operations, including directory synchronization, with progress reporting
 and error handling.
 """
-import boto3
 import os
 import json
 import hashlib
@@ -12,11 +11,23 @@ import mimetypes
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Union, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from botocore.exceptions import ClientError, NoCredentialsError
-from botocore.config import Config
+import time
+
+# Conditional imports for AWS dependencies
+try:
+    import boto3
+    from botocore.exceptions import ClientError, NoCredentialsError
+    from botocore.config import Config
+    AWS_AVAILABLE = True
+except ImportError:
+    boto3 = None
+    ClientError = Exception
+    NoCredentialsError = Exception
+    Config = None
+    AWS_AVAILABLE = False
+
 from utils.config_loader import ConfigLoader, config_loader
 from utils.logger import logger
-import time
 
 class S3Connector:
     """AWS S3 connector for file operations."""
@@ -34,6 +45,11 @@ class S3Connector:
         self.aws_config = None
         self.profile_name = profile_name
         self.config_section = config_section
+        
+        if not AWS_AVAILABLE:
+            logger.warning("AWS functionality not available - boto3 module required")
+            return
+            
         self.setup_aws_connection()
     
     def setup_aws_connection(self):

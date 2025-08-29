@@ -15,17 +15,20 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from db.database_connector import db_connector
 from db.mongodb_connector import mongodb_connector
-from db.data_comparator import data_comparator
-from web.api_client import api_client
+from utils.data_comparator import data_comparator
+from api.rest_client import RestClient
 from mq.mq_producer import mq_producer
 from aws.sqs_connector import sqs_connector
-from aws.s3_connector import s3_connector
-from aws.sql_integration import aws_sql_integration
+from aws.s3_connector import S3Connector
+from aws.sql_integration import AWSSQLIntegration
 from utils.config_loader import ConfigLoader
 from utils.logger import logger
 from utils.export_utils import ExportUtils
 
 export_utils = ExportUtils()
+aws_sql_integration = AWSSQLIntegration()  # Create instance for AWS-SQL integration
+api_client = RestClient()  # Create instance for API client
+s3_connector = S3Connector()  # Create instance for S3 connector
 
 @click.group()
 @click.option('--env', default='DEV', help='Environment (DEV, QA, PROD)')

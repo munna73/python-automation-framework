@@ -8,11 +8,12 @@ from utils.logger import logger
 try:
     from aws.sqs_connector import SqsConnector  # Import the class
     from aws.s3_connector import S3Connector  # Import the class
-    from aws.sql_integration import aws_sql_integration
+    from aws.sql_integration import AWSSQLIntegration
     AWS_AVAILABLE = True
     # Create factory functions for backward compatibility
     sqs_connector = lambda profile_name=None: SqsConnector(profile_name=profile_name)
     s3_connector = lambda profile_name=None: S3Connector(profile_name=profile_name)
+    aws_sql_integration = AWSSQLIntegration()  # Create instance of the class
 except ImportError as e:
     logger.warning(f"AWS modules not available: {e}")
     AWS_AVAILABLE = False
@@ -80,6 +81,7 @@ def step_set_message_group_id(context, group_id):
 @when('I send message "{message_text}" to SQS queue')
 def step_send_message_to_sqs(context, message_text):
     """Send a message to SQS queue."""
+    require_aws()
     logger.info(f"Sending message to SQS: {message_text}")
     
     try:
@@ -103,6 +105,7 @@ def step_send_message_to_sqs(context, message_text):
 @when('I send message with attributes to SQS queue')
 def step_send_message_with_attributes(context):
     """Send message with custom attributes from table."""
+    require_aws()
     message_text = context.text or "Test message with attributes"
     attributes = {}
     
@@ -125,6 +128,7 @@ def step_send_message_with_attributes(context):
 @when('I send {count:d} messages to SQS queue in batch')
 def step_send_batch_messages(context, count):
     """Send multiple messages in batch."""
+    require_aws()
     logger.info(f"Sending {count} messages in batch to SQS")
     
     messages = []
@@ -170,6 +174,7 @@ def step_send_message_with_retries(context, message_text, retries):
 @when('I send file "{filename}" to SQS queue line by line')
 def step_send_file_line_by_line_sqs(context, filename):
     """Send file to SQS queue line by line."""
+    require_aws()
     logger.info(f"Sending file to SQS line by line: {filename}")
     
     try:
@@ -186,6 +191,7 @@ def step_send_file_line_by_line_sqs(context, filename):
 @when('I send file "{filename}" to SQS queue as single message')
 def step_send_file_as_single_message_sqs(context, filename):
     """Send entire file as single SQS message."""
+    require_aws()
     logger.info(f"Sending file to SQS as single message: {filename}")
     
     try:
@@ -199,6 +205,7 @@ def step_send_file_as_single_message_sqs(context, filename):
 @when('I receive messages from SQS queue')
 def step_receive_messages_from_sqs(context):
     """Receive messages from SQS queue."""
+    require_aws()
     logger.info("Receiving messages from SQS queue")
     
     # Better default handling
@@ -354,6 +361,7 @@ def step_set_local_directory(context, directory):
 @when('I download file "{s3_key}" from S3 to "{local_path}"')
 def step_download_s3_file(context, s3_key, local_path):
     """Download single file from S3."""
+    require_aws()
     logger.info(f"Downloading S3 file: {s3_key} -> {local_path}")
     
     try:
@@ -390,6 +398,7 @@ def step_download_s3_directory(context):
 @when('I upload file "{local_path}" to S3 as "{s3_key}"')
 def step_upload_file_to_s3(context, local_path, s3_key):
     """Upload file to S3."""
+    require_aws()
     logger.info(f"Uploading file to S3: {local_path} -> {s3_key}")
     
     try:
